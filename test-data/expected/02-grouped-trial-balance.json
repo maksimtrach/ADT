@@ -1,0 +1,24 @@
+[
+  {
+    "account": "62",
+    "subaccount": "62.01",
+    "analytics": "Покупатель Север",
+    "opening_debit": 2000.0,
+    "opening_credit": null,
+    "turnover_debit": 3000.0,
+    "turnover_credit": 1000.0,
+    "closing_debit": 4000.0,
+    "closing_credit": null
+  },
+  {
+    "account": "62",
+    "subaccount": "62.01",
+    "analytics": "Покупатель Юг",
+    "opening_debit": 500.0,
+    "opening_credit": null,
+    "turnover_debit": 700.0,
+    "turnover_credit": 300.0,
+    "closing_debit": 900.0,
+    "closing_credit": null
+  }
+]

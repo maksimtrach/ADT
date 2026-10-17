@@ -1,0 +1,35 @@
+[
+  {
+    "account": "50.01",
+    "subaccount": null,
+    "analytics": "Касса",
+    "opening_debit": 1000.0,
+    "opening_credit": null,
+    "turnover_debit": 500.0,
+    "turnover_credit": 300.0,
+    "closing_debit": 1200.0,
+    "closing_credit": null
+  },
+  {
+    "account": "51",
+    "subaccount": "51.01",
+    "analytics": "Основной счет",
+    "opening_debit": 15000.0,
+    "opening_credit": null,
+    "turnover_debit": 2500.0,
+    "turnover_credit": 4000.0,
+    "closing_debit": 13500.0,
+    "closing_credit": null
+  },
+  {
+    "account": "60.01",
+    "subaccount": null,
+    "analytics": "Поставщик Альфа",
+    "opening_debit": null,
+    "opening_credit": 2000.0,
+    "turnover_debit": 7500.0,
+    "turnover_credit": 6000.0,
+    "closing_debit": null,
+    "closing_credit": 500.0
+  }
+]

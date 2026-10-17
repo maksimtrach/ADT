@@ -1,0 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { @apply border-slate-200; }
+  body { @apply m-0 bg-canvas font-sans text-ink antialiased; }
+  button, a, input, select, textarea {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action/40 focus-visible:ring-offset-1;
+  }
+}
+
+@layer components {
+  .data-table { @apply w-full border-collapse text-left text-sm; }
+  .data-table th { @apply border-b bg-slate-50 px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-slate-500; }
+  .data-table td { @apply border-b px-4 py-3 align-middle; }
+  .data-table tbody tr { @apply transition-colors hover:bg-blue-50/40; }
+  .field-label { @apply mb-1.5 block text-xs font-semibold text-slate-700; }
+}
+

@@ -1,0 +1,24 @@
+[
+  {
+    "account": "76",
+    "subaccount": "76.05",
+    "analytics": "Контрагент Один",
+    "opening_debit": 100.0,
+    "opening_credit": null,
+    "turnover_debit": 400.0,
+    "turnover_credit": 250.0,
+    "closing_debit": 250.0,
+    "closing_credit": null
+  },
+  {
+    "account": "76",
+    "subaccount": "76.05",
+    "analytics": "Контрагент Два",
+    "opening_debit": 200.0,
+    "opening_credit": null,
+    "turnover_debit": 300.0,
+    "turnover_credit": 100.0,
+    "closing_debit": 400.0,
+    "closing_credit": null
+  }
+]

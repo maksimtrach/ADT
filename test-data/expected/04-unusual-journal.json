@@ -1,0 +1,22 @@
+[
+  {
+    "date": "2026-01-15",
+    "document_number": "РН-001",
+    "debit_account": "26",
+    "credit_account": "60.01",
+    "debit_analytics": "Основное производство",
+    "credit_analytics": "Поставщик Альфа",
+    "amount": 12500.5,
+    "description": "Поступление услуг"
+  },
+  {
+    "date": "2026-01-16",
+    "document_number": "ПП-002",
+    "debit_account": "60.01",
+    "credit_account": "51.01",
+    "debit_analytics": "Поставщик Альфа",
+    "credit_analytics": "Основной счет",
+    "amount": 12500.5,
+    "description": "Оплата поставщику"
+  }
+]

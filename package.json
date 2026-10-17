@@ -1,0 +1,19 @@
+{
+  "name": "audit-data-transformer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:web": "npm run dev --prefix frontend",
+    "dev:api": ".venv/bin/uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000",
+    "build": "npm run build --prefix frontend",
+    "typecheck": "npm run typecheck --prefix frontend",
+    "test": ".venv/bin/pytest backend/tests && npm run test --prefix frontend",
+    "seed": ".venv/bin/python -m backend.app.seed",
+    "generate:fixtures": ".venv/bin/python scripts/generate_test_files.py"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
+
