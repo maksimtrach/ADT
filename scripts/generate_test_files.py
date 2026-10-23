@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,15 +95,91 @@ def unusual_journal() -> None:
     ])
 
 
+def hierarchical_trial_balance() -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Многоуровневая ОСВ"
+    sheet.append(["Оборотно-сальдовая ведомость"])
+    sheet.append([
+        "Счет",
+        "Сальдо на начало",
+        None,
+        "Обороты",
+        None,
+        "Сальдо на конец",
+        None,
+    ])
+    sheet.append(["Организация\nСтатья затрат", "Дебет", "Кредит", "Дебет", "Кредит", "Дебет", "Кредит"])
+    sheet.merge_cells("B2:C2")
+    sheet.merge_cells("D2:E2")
+    sheet.merge_cells("F2:G2")
+    for row_number in (2, 3):
+        for cell in sheet[row_number]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="001529")
+    rows = [
+        ["20", None, None, None, None, None, None],
+        ["ООО Компания А", None, None, None, None, None, None],
+        ["Материальные затраты", 1000, None, 500, 200, 1300, None],
+        ["Оплата труда", 2000, None, 1200, 900, 2300, None],
+        ["ООО Компания Б", None, None, None, None, None, None],
+        ["Материальные затраты", 3000, None, 700, 400, 3300, None],
+        ["Итого", 6000, None, 2400, 1500, 6900, None],
+    ]
+    for row in rows:
+        sheet.append(row)
+    sheet["A5"].alignment = Alignment(indent=1)
+    sheet["A6"].alignment = Alignment(indent=2)
+    sheet["A7"].alignment = Alignment(indent=2)
+    sheet["A8"].alignment = Alignment(indent=1)
+    sheet["A9"].alignment = Alignment(indent=2)
+    workbook.save(OUTPUT / "05-hierarchical-trial-balance.xlsx")
+    save_expected("05-hierarchical-trial-balance", [
+        {
+            "account": "20",
+            "organization": "ООО Компания А",
+            "cost_item": "Материальные затраты",
+            "opening_debit": 1000.0,
+            "opening_credit": None,
+            "turnover_debit": 500.0,
+            "turnover_credit": 200.0,
+            "closing_debit": 1300.0,
+            "closing_credit": None,
+        },
+        {
+            "account": "20",
+            "organization": "ООО Компания А",
+            "cost_item": "Оплата труда",
+            "opening_debit": 2000.0,
+            "opening_credit": None,
+            "turnover_debit": 1200.0,
+            "turnover_credit": 900.0,
+            "closing_debit": 2300.0,
+            "closing_credit": None,
+        },
+        {
+            "account": "20",
+            "organization": "ООО Компания Б",
+            "cost_item": "Материальные затраты",
+            "opening_debit": 3000.0,
+            "opening_credit": None,
+            "turnover_debit": 700.0,
+            "turnover_credit": 400.0,
+            "closing_debit": 3300.0,
+            "closing_credit": None,
+        },
+    ])
+
+
 def generate_all() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     simple_trial_balance()
     grouped_trial_balance()
     merged_trial_balance()
     unusual_journal()
+    hierarchical_trial_balance()
     print(f"Созданы синтетические файлы: {OUTPUT}")
 
 
 if __name__ == "__main__":
     generate_all()
-

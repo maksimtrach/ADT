@@ -54,6 +54,7 @@ def profile_workbook(path: Path) -> dict[str, Any]:
         raise AppError(400, "Не удалось прочитать XLSX-файл", "INVALID_XLSX") from error
 
     sheets: list[dict[str, Any]] = []
+    cached_workbook = load_workbook(path, data_only=True, read_only=False, keep_links=False)
     for worksheet in workbook.worksheets:
         nonempty_rows: list[int] = []
         nonempty_cells = 0
@@ -90,8 +91,18 @@ def profile_workbook(path: Path) -> dict[str, Any]:
 
         sample_rows = []
         for row_number in _sample_indexes(nonempty_rows):
-            values = [safe_value(worksheet.cell(row_number, column).value) for column in range(1, max_data_column + 1)]
-            sample_rows.append({"row": row_number, "values": values})
+            values = [safe_value(cached_workbook[worksheet.title].cell(row_number, column).value)
+                      for column in range(1, max_data_column + 1)]
+            sample_rows.append(
+                {
+                    "row": row_number,
+                    "values": values,
+                    "formula_columns": [column for column in range(1, max_data_column + 1)
+                                        if worksheet.cell(row_number, column).data_type == "f"],
+                    "indents": [int(worksheet.cell(row_number, column).alignment.indent or 0) for column in range(1, max_data_column + 1)],
+                    "outline_level": int(worksheet.row_dimensions[row_number].outlineLevel or 0),
+                }
+            )
 
         sheets.append(
             {
@@ -110,5 +121,5 @@ def profile_workbook(path: Path) -> dict[str, Any]:
             }
         )
     workbook.close()
+    cached_workbook.close()
     return {"sheets": sheets, "sheet_count": len(sheets)}
-

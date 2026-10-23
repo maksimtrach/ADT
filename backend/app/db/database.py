@@ -102,6 +102,31 @@ CREATE TABLE IF NOT EXISTS transformation_versions (
   UNIQUE(transformation_id, version)
 );
 
+CREATE TABLE IF NOT EXISTS transformation_runs (
+  id TEXT PRIMARY KEY,
+  transformation_id TEXT NOT NULL REFERENCES transformations(id) ON DELETE CASCADE,
+  target_version INTEGER NOT NULL,
+  feedback TEXT,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_transformation_runs_latest
+  ON transformation_runs(transformation_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS transformation_run_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES transformation_runs(id) ON DELETE CASCADE,
+  transformation_id TEXT NOT NULL REFERENCES transformations(id) ON DELETE CASCADE,
+  stage TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  level TEXT NOT NULL DEFAULT 'INFO',
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_transformation_run_events_order
+  ON transformation_run_events(run_id, id);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT REFERENCES users(id),
@@ -140,4 +165,3 @@ def record_audit(
             """,
             (user_id, action, entity_type, entity_id, outcome, json_dump(details or {}), utc_now()),
         )
-

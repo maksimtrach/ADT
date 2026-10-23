@@ -22,7 +22,9 @@ from backend.app.models.domain import (
 )
 from backend.app.services.file_profiler import validate_xlsx
 from backend.app.services.pipeline import process_transformation
-from backend.app.services.planner import OllamaPlanner
+from backend.app.services.planner import LLMPlanner
+from backend.app.services.feedback_rules import explicit_column_feedback
+from backend.app.services.processing_log import create_processing_run
 from backend.app.services.templates import TEMPLATES
 
 
@@ -110,7 +112,8 @@ async def create_transformation(
         entity_id=transformation_id,
         details={"dataType": data_type.value, "sizeBytes": size},
     )
-    background_tasks.add_task(process_transformation, transformation_id)
+    run_id = create_processing_run(transformation_id, 1)
+    background_tasks.add_task(process_transformation, transformation_id, None, run_id)
     return {"data": _detail(row)}
 
 
@@ -133,6 +136,48 @@ def list_transformations(
 @router.get("/{transformation_id}")
 def get_transformation(transformation_id: str, user: UserPublic = Depends(current_user)):
     return {"data": _detail(_owned_row(transformation_id, user))}
+
+
+@router.get("/{transformation_id}/memo")
+def processing_memo(transformation_id: str, user: UserPublic = Depends(current_user)):
+    _owned_row(transformation_id, user)
+    with connection() as db:
+        run = db.execute(
+            """
+            SELECT * FROM transformation_runs
+            WHERE transformation_id = ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (transformation_id,),
+        ).fetchone()
+        if not run:
+            raise AppError(404, "Техническое мемо для этого преобразования отсутствует", "MEMO_NOT_AVAILABLE")
+        events = db.execute(
+            """
+            SELECT id, stage, event_type, level, details_json, created_at
+            FROM transformation_run_events
+            WHERE run_id = ?
+            ORDER BY id
+            """,
+            (run["id"],),
+        ).fetchall()
+    return {
+        "data": {
+            "run": dict(run),
+            "events": [
+                {
+                    "id": event["id"],
+                    "stage": event["stage"],
+                    "event_type": event["event_type"],
+                    "level": event["level"],
+                    "details": json_load(event["details_json"], {}),
+                    "created_at": event["created_at"],
+                }
+                for event in events
+            ],
+        }
+    }
 
 
 @router.get("/{transformation_id}/preview")
@@ -184,8 +229,8 @@ def retry(
     if row["status"] in ("QUEUED", "RUNNING"):
         raise AppError(409, "Обработка уже выполняется", "ALREADY_RUNNING")
     feedback = payload.feedback.strip() if payload.feedback else None
-    if feedback and not OllamaPlanner().available():
-        raise AppError(503, "Локальная LLM недоступна", "LLM_UNAVAILABLE")
+    if feedback and explicit_column_feedback(feedback) is None and not LLMPlanner().available():
+        raise AppError(503, "Настроенные LLM недоступны", "LLM_UNAVAILABLE")
     with connection() as db:
         db.execute(
             "UPDATE transformations SET status = 'QUEUED', current_stage = 'QUEUED', error_message = NULL, updated_at = ? WHERE id = ?",
@@ -199,6 +244,6 @@ def retry(
         entity_id=transformation_id,
         details={"hasFeedback": bool(feedback)},
     )
-    background_tasks.add_task(process_transformation, transformation_id, feedback)
+    run_id = create_processing_run(transformation_id, row["current_version"] + 1, feedback)
+    background_tasks.add_task(process_transformation, transformation_id, feedback, run_id)
     return {"data": _detail(updated)}
-

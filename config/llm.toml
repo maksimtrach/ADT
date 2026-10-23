@@ -1,0 +1,32 @@
+# Выберите профиль здесь или через переменную окружения LLM_PROFILE.
+active_profile = "remote_qwen35"
+fallback_profiles = ["local_ollama"]
+
+[profiles.local_ollama]
+enabled = true
+protocol = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "max-gpu-qwen:latest"
+timeout_seconds = 180
+thinking = false
+no_think_suffix = true
+keep_alive = "10m"
+
+[profiles.local_ollama.generation]
+temperature = 0
+max_tokens = 1800
+context_size = 16384
+
+[profiles.remote_qwen35]
+enabled = true
+protocol = "openai"
+base_url = "http://192.168.1.65:1234/v1"
+model = "qwen/qwen3.5-9b"
+timeout_seconds = 180
+thinking = false
+no_think_suffix = false
+structured_output = true
+
+[profiles.remote_qwen35.generation]
+temperature = 0
+max_tokens = 1800

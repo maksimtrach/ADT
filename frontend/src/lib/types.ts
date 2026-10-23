@@ -34,6 +34,24 @@ export interface TransformationDetail extends TransformationSummary {
 }
 
 export interface PreviewResponse { columns: TargetColumn[]; rows: Array<Record<string, unknown>>; total: number; version: number }
+export interface TransformationRun {
+  id: string;
+  transformation_id: string;
+  target_version: number;
+  feedback?: string | null;
+  status: TransformationStatus;
+  started_at: string;
+  finished_at?: string | null;
+}
+export interface TransformationRunEvent {
+  id: number;
+  stage: ProcessingStage;
+  event_type: string;
+  level: "INFO" | "WARNING" | "ERROR";
+  details: Record<string, unknown>;
+  created_at: string;
+}
+export interface TransformationMemo { run: TransformationRun; events: TransformationRunEvent[] }
 export interface AuditLogItem {
   id: number;
   user_id?: string;
@@ -46,4 +64,3 @@ export interface AuditLogItem {
   details: Record<string, unknown>;
   created_at: string;
 }
-

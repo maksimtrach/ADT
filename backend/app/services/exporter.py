@@ -42,14 +42,31 @@ def export_result(
     controls.append(["Статус", validation["status"]])
     controls.append(["Обработано строк", len(rows)])
     controls.append(["Не обработано строк", len(validation["unprocessed_row_numbers"])])
+    controls.append(["Независимая сверка итогов", "Есть" if validation.get("independent_totals_available") else "Итоги отсутствуют"])
+    if validation.get("row_balance"):
+        controls.append(["Проверено построчных равенств", validation["row_balance"]["checked"]])
+        controls.append(["Нарушено построчных равенств", validation["row_balance"]["failed"]])
+    if spec.row_rules.account_tree:
+        if validation.get("aggregation_available", True):
+            controls.append(["Способ суммирования", "Двухзначные корневые счета: область подтверждена всеми шестью итогами" if validation.get("aggregation") == "two_digit_root_accounts" else "Только верхний уровень счетов; субсчета и валютные расшифровки не прибавляются повторно"])
+            controls.append(["Счетов в контрольной сумме", validation["control_row_count"]])
+        else:
+            controls.append(["Способ суммирования", "Общие суммы не рассчитаны: неоднозначные коды счетов"])
+    for kind, count in validation.get("row_classification", {}).items():
+        controls.append([f"Тип строк: {kind}", count])
+    controls.append(["Контрольные строки источника", ", ".join(map(str, validation.get("control_rows", [])))])
+    if validation.get("scope_excluded_rows"):
+        controls.append(["Корневые строки вне области сверки", ", ".join(map(str, validation["scope_excluded_rows"]))])
     for warning in validation["warnings"]:
         controls.append(["Предупреждение", warning])
     for key, value in validation["calculated_sums"].items():
         controls.append([f"Сумма: {key}", value])
+    for key, comparison in validation["control_comparisons"].items():
+        controls.append([f"Итог источника: {key}", comparison["declared"]])
+        controls.append([f"Расхождение: {key}", comparison["difference"]])
     for cell in controls[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="001529")
     controls.column_dimensions["A"].width = 34
     controls.column_dimensions["B"].width = 80
     workbook.save(path)
-

@@ -13,7 +13,7 @@ from backend.app.api.transformations import router as transformations_router
 from backend.app.core.config import settings
 from backend.app.core.errors import AppError
 from backend.app.db.database import initialize_database
-from backend.app.services.planner import OllamaPlanner
+from backend.app.services.planner import LLMPlanner
 
 
 @asynccontextmanager
@@ -47,11 +47,10 @@ async def validation_error_handler(_: Request, error: RequestValidationError):
 
 @app.get("/health")
 def health():
-    planner = OllamaPlanner()
-    return {"status": "ok", "llm": {"provider": settings.llm_provider, "model": settings.ollama_model, "available": planner.available()}}
+    planner = LLMPlanner()
+    return {"status": "ok", "llm": planner.health()}
 
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(transformations_router, prefix="/api")
 app.include_router(audit_log_router, prefix="/api")
-

@@ -25,8 +25,10 @@ class Settings(BaseSettings):
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "max-gpu-qwen:latest"
     llm_timeout_seconds: int = 180
+    llm_config_path: Path = Path("./config/llm.toml")
+    llm_profile: str | None = None
 
-    @field_validator("database_path", "storage_path", mode="before")
+    @field_validator("database_path", "storage_path", "llm_config_path", mode="before")
     @classmethod
     def resolve_path(cls, value: str | Path) -> Path:
         return Path(value).expanduser().resolve()
@@ -42,4 +44,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-

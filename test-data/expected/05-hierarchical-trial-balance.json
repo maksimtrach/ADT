@@ -1,0 +1,35 @@
+[
+  {
+    "account": "20",
+    "organization": "ООО Компания А",
+    "cost_item": "Материальные затраты",
+    "opening_debit": 1000.0,
+    "opening_credit": null,
+    "turnover_debit": 500.0,
+    "turnover_credit": 200.0,
+    "closing_debit": 1300.0,
+    "closing_credit": null
+  },
+  {
+    "account": "20",
+    "organization": "ООО Компания А",
+    "cost_item": "Оплата труда",
+    "opening_debit": 2000.0,
+    "opening_credit": null,
+    "turnover_debit": 1200.0,
+    "turnover_credit": 900.0,
+    "closing_debit": 2300.0,
+    "closing_credit": null
+  },
+  {
+    "account": "20",
+    "organization": "ООО Компания Б",
+    "cost_item": "Материальные затраты",
+    "opening_debit": 3000.0,
+    "opening_credit": null,
+    "turnover_debit": 700.0,
+    "turnover_credit": 400.0,
+    "closing_debit": 3300.0,
+    "closing_credit": null
+  }
+]

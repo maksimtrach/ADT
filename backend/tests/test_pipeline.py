@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from openpyxl import Workbook, load_workbook
 
 from backend.app.models.domain import DataType
 from backend.app.services.file_profiler import profile_workbook, validate_xlsx
+from backend.app.services.exporter import export_result
 from backend.app.services.parser import parse_workbook
 from backend.app.services.planner import rule_plan
 from backend.app.services.validator import validate_result
@@ -24,6 +26,7 @@ def generated_files():
         ("02-grouped-trial-balance", DataType.TRIAL_BALANCE, "trial_balance_flat_v1"),
         ("03-merged-trial-balance", DataType.TRIAL_BALANCE, "trial_balance_flat_v1"),
         ("04-unusual-journal", DataType.JOURNAL, "journal_flat_v1"),
+        ("05-hierarchical-trial-balance", DataType.TRIAL_BALANCE, "trial_balance_flat_v1"),
     ],
 )
 def test_synthetic_file_matches_expected(filename: str, data_type: DataType, template_id: str):
@@ -41,3 +44,47 @@ def test_synthetic_file_matches_expected(filename: str, data_type: DataType, tem
     assert validation["status"] in {"PASSED", "WARNINGS"}
     assert not validation["missing_required"]
 
+
+def test_multiline_header_defines_dynamic_analytic_hierarchy(tmp_path):
+    path = OUTPUT / "05-hierarchical-trial-balance.xlsx"
+    spec = rule_plan(path, DataType.TRIAL_BALANCE, "trial_balance_flat_v1")
+
+    assert (spec.header_start_row, spec.header_end_row) == (2, 3)
+    assert spec.data_start_row == 4
+    assert spec.hierarchy is not None
+    assert [level.key for level in spec.hierarchy.levels] == ["account", "organization", "cost_item"]
+    assert [column.key for column in spec.target_columns[:3]] == ["account", "organization", "cost_item"]
+    parsed = parse_workbook(path, spec, DataType.TRIAL_BALANCE)
+    validation = validate_result(parsed, spec)
+    result_path = tmp_path / "dynamic-result.xlsx"
+    export_result(result_path, parsed.rows, spec, validation)
+    result_book = load_workbook(result_path, read_only=True)
+    headers = [cell.value for cell in result_book["Результат"][1]]
+    result_book.close()
+    assert headers[:3] == ["Счет", "Организация", "Статья затрат"]
+
+
+@pytest.mark.parametrize(
+    ("analytic_label", "expected_key"),
+    [
+        ("Основное средство", "fixed_asset"),
+        ("Нематериальный актив", "intangible_asset"),
+        ("Номер кредитного договора", "loan_agreement"),
+        ("Пользовательское измерение", "analytics_1"),
+    ],
+)
+def test_dynamic_analytic_type_is_taken_from_header(tmp_path, analytic_label: str, expected_key: str):
+    path = tmp_path / "dynamic-analytics.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "ОСВ"
+    sheet.append([f"Счет\nОрганизация\n{analytic_label}", "Оборот Дт"])
+    sheet.append(["20", None])
+    sheet.append(["ООО Компания", None])
+    sheet.append(["Значение аналитики", 100])
+    workbook.save(path)
+
+    spec = rule_plan(path, DataType.TRIAL_BALANCE, "trial_balance_flat_v1")
+
+    assert spec.hierarchy is not None
+    assert [level.key for level in spec.hierarchy.levels] == ["account", "organization", expected_key]

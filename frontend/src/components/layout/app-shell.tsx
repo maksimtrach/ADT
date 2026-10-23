@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, FileClock, FileSpreadsheet, LogOut, Menu, ShieldCheck, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileClock, FileSpreadsheet, History, LogOut, Menu, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../../features/auth/auth-context";
@@ -15,6 +15,7 @@ export function AppShell() {
   const setCollapsed = (value: boolean) => { setCollapsedState(value); window.localStorage.setItem(SIDEBAR_KEY, String(value)); };
   const nav = [
     { to: "/transformations", label: "Преобразования", icon: FileSpreadsheet },
+    { to: "/history", label: "История", icon: History },
     ...(user?.role === "ADMIN" ? [{ to: "/audit-log", label: "Журнал действий", icon: FileClock }] : []),
   ];
   const sidebar = (isCollapsed: boolean) => (
@@ -49,4 +50,3 @@ export function AppShell() {
     </div>
   );
 }
-
