@@ -34,6 +34,17 @@ export interface TransformationDetail extends TransformationSummary {
 }
 
 export interface PreviewResponse { columns: TargetColumn[]; rows: Array<Record<string, unknown>>; total: number; version: number }
+export interface SourcePreview {
+  upload_id: string;
+  filename: string;
+  sheets: string[];
+  sheet_name: string;
+  columns: string[];
+  rows: Array<{ row: number; cells: Array<string | number | boolean | null> }>;
+  total_rows: number;
+  total_columns: number;
+  columns_truncated: boolean;
+}
 export interface TransformationRun {
   id: string;
   transformation_id: string;

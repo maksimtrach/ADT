@@ -8,7 +8,9 @@ import type { TransformationDetail } from "../lib/types";
 import { TransformationPage } from "./transformation-page";
 
 const { request, showToast } = vi.hoisted(() => ({ request: vi.fn(), showToast: vi.fn() }));
-vi.mock("../lib/api", () => ({ api: request, downloadResult: vi.fn() }));
+vi.mock("../lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/api")>()), api: request, downloadResult: vi.fn(),
+}));
 vi.mock("../components/ui/toast", () => ({ useToast: () => ({ show: showToast }) }));
 vi.mock("../features/transformations/technical-memo", () => ({ TechnicalMemo: () => <div>Мемо сохранено</div> }));
 
@@ -37,10 +39,10 @@ async function enterComment(value: string) {
   });
 }
 
-async function mount() {
+async function mount(path = "/transformations/test") {
   await act(async () => {
-    root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/transformations/test"]}>
-      <Routes><Route path="/transformations/:transformationId" element={<TransformationPage />} /></Routes>
+    root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}>
+      <Routes><Route path="/transformations" element={<TransformationPage />} /><Route path="/transformations/:transformationId" element={<TransformationPage />} /></Routes>
     </MemoryRouter></QueryClientProvider>);
   });
   await settle();
@@ -86,7 +88,7 @@ describe("Повторная обработка", () => {
     expect(button("Повторить с комментарием").disabled).toBe(true);
     expect(container.textContent).toContain("Загружать файл заново не требуется");
     expect(container.textContent).toContain("Структура неоднозначна");
-    expect(container.textContent).not.toContain("Скачать Excel");
+    expect(container.textContent).not.toContain("Выгрузить в Excel");
     expect(request.mock.calls.some(([path]) => path.endsWith("/preview"))).toBe(false);
   });
 
@@ -140,12 +142,116 @@ describe("Повторная обработка", () => {
   it("показывает результат только после успеха, но оставляет форму после последующей ошибки", async () => {
     detail = { ...detail, status: "COMPLETED", current_stage: "COMPLETED", version: 1, error_message: undefined };
     await mount();
-    expect(button("Скачать Excel")).toBeDefined();
+    expect(button("Выгрузить в Excel")).toBeDefined();
     expect(button("Повторить без изменений").disabled).toBe(false);
     detail = { ...detail, status: "FAILED", current_stage: "FAILED" };
     await act(async () => { client.setQueryData(["transformation", "test"], detail); });
     await settle();
-    expect(container.textContent).not.toContain("Скачать Excel");
+    expect(container.textContent).not.toContain("Выгрузить в Excel");
     expect(textarea()).not.toBeNull();
+  });
+});
+
+describe("Вертикальная компоновка", () => {
+  const blocks = [
+    "1. Загрузка файла", "2. Параметры преобразования", "3. Статус преобразования",
+    "4. Результаты преобразования", "5. Корректировки",
+  ];
+
+  it("показывает все пять блоков по порядку до загрузки", async () => {
+    await mount("/transformations");
+    expect(Array.from(container.querySelectorAll("h2"), (heading) => heading.textContent)).toEqual(blocks);
+    expect(textarea().disabled).toBe(true);
+    expect(button("Преобразовать").disabled).toBe(true);
+    expect(button("Повторить без изменений").disabled).toBe(true);
+    expect(container.textContent).toContain("Результат пока не готов");
+  });
+
+  it("показывает первые строки в области с прокруткой и кнопку выгрузки после успеха", async () => {
+    detail = { ...detail, status: "COMPLETED", current_stage: "COMPLETED", version: 1, error_message: undefined };
+    request.mockImplementation(async (path: string) => {
+      if (path === "/transformations/templates") return [];
+      if (path === "/transformations/test") return detail;
+      if (path.endsWith("/preview")) return {
+        columns: [{ key: "account", label: "Счет", kind: "text", required: true }],
+        rows: [{ account: "01", _source_row: 8 }], total: 120, version: 1,
+      };
+      throw new Error(`Неожиданный запрос: ${path}`);
+    });
+    await mount();
+    expect(Array.from(container.querySelectorAll("h2"), (heading) => heading.textContent)).toEqual(blocks);
+    expect(button("Выгрузить в Excel")).toBeDefined();
+    const region = container.querySelector<HTMLElement>('[role="region"][aria-label="Первые строки результата"]');
+    expect(region?.className).toContain("overflow-auto");
+    expect(region?.className).toContain("max-h-[32rem]");
+    expect(region?.querySelector("th")?.className).toContain("sticky");
+    expect(region?.textContent).toContain("01");
+    expect(container.textContent).toContain("Показаны первые 1 из 120 записей");
+  });
+});
+
+describe("Предпросмотр исходного файла", () => {
+  it("показывает 100 строк, переключает лист и запускает обработку без повторной передачи файла", async () => {
+    const rows = Array.from({ length: 100 }, (_, index) => ({ row: index + 1, cells: [index + 1, index === 0 ? "Заголовок" : null] }));
+    const source = {
+      upload_id: "staged-1", filename: "source.xlsx", sheets: ["ОСВ", "Второй лист"],
+      sheet_name: "ОСВ", columns: ["A", "B"], rows, total_rows: 105,
+      total_columns: 2, columns_truncated: false,
+    };
+    request.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/transformations/templates") return [];
+      if (path === "/transformations/source-uploads" && init?.method === "POST") return source;
+      if (path.includes("/source-uploads/staged-1/preview?sheet=")) {
+        return { ...source, sheet_name: "Второй лист", columns: ["A"], rows: [{ row: 1, cells: ["Другой лист"] }] };
+      }
+      if (path === "/transformations" && init?.method === "POST") {
+        return { ...detail, id: "created", status: "QUEUED", current_stage: "QUEUED" };
+      }
+      if (path === "/transformations/created") return { ...detail, id: "created", status: "QUEUED", current_stage: "QUEUED" };
+      throw new Error(`Неожиданный запрос: ${path}`);
+    });
+    await mount("/transformations");
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    await act(async () => {
+      Object.defineProperty(input, "files", { configurable: true, value: [new File(["xlsx"], "source.xlsx")] });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    const region = container.querySelector<HTMLElement>('[role="region"][aria-label="Предпросмотр исходного файла"]');
+    expect(region?.className).toContain("max-h-[34rem]");
+    expect(region?.className).toContain("overflow-auto");
+    expect(region?.querySelectorAll("tbody tr")).toHaveLength(100);
+    expect(region?.querySelector("thead th")?.className).toContain("sticky");
+    expect(container.textContent).toContain("первые 100 из 105 строк");
+    expect(button("Преобразовать").disabled).toBe(false);
+
+    const sheet = container.querySelector<HTMLSelectElement>("#source-sheet")!;
+    await act(async () => { sheet.value = "Второй лист"; sheet.dispatchEvent(new Event("change", { bubbles: true })); });
+    await settle();
+    expect(container.querySelector('[aria-label="Предпросмотр исходного файла"]')?.textContent).toContain("Другой лист");
+
+    await act(async () => button("Преобразовать").click());
+    const create = request.mock.calls.find(([path, init]) => path === "/transformations" && init?.method === "POST");
+    const body = create?.[1]?.body as FormData;
+    expect(body.get("upload_id")).toBe("staged-1");
+    expect(body.get("file")).toBeNull();
+  });
+
+  it("оставляет преобразование недоступным, если предварительное чтение файла завершилось ошибкой", async () => {
+    request.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/transformations/templates") return [];
+      if (path === "/transformations/source-uploads" && init?.method === "POST") throw new Error("Файл повреждён");
+      throw new Error(`Неожиданный запрос: ${path}`);
+    });
+    await mount("/transformations");
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    await act(async () => {
+      Object.defineProperty(input, "files", { configurable: true, value: [new File(["bad"], "source.xlsx")] });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    expect(container.textContent).toContain("Файл повреждён");
+    expect(button("Преобразовать").disabled).toBe(true);
+    expect(button("Повторить загрузку")).toBeDefined();
   });
 });

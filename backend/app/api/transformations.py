@@ -25,6 +25,7 @@ from backend.app.services.pipeline import process_transformation
 from backend.app.services.planner import LLMPlanner
 from backend.app.services.feedback_rules import explicit_column_feedback
 from backend.app.services.processing_log import create_processing_run
+from backend.app.services.source_uploads import consume_upload, discard_upload, owned_upload, source_preview, stage_upload
 from backend.app.services.templates import TEMPLATES
 
 
@@ -59,15 +60,34 @@ def templates(user: UserPublic = Depends(current_user)):
     return {"data": list(TEMPLATES.values())}
 
 
+@router.post("/source-uploads")
+async def create_source_upload(file: UploadFile = File(...), user: UserPublic = Depends(current_user)):
+    return {"data": await stage_upload(file, user.id)}
+
+
+@router.get("/source-uploads/{upload_id}/preview")
+def get_source_preview(upload_id: str, sheet: str | None = None, user: UserPublic = Depends(current_user)):
+    return {"data": source_preview(upload_id, user.id, sheet)}
+
+
+@router.delete("/source-uploads/{upload_id}", status_code=204)
+def delete_source_upload(upload_id: str, user: UserPublic = Depends(current_user)):
+    discard_upload(upload_id, user.id)
+
+
 @router.post("")
 async def create_transformation(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
+    upload_id: str | None = Form(None),
     data_type: DataType = Form(...),
     template_id: str = Form(...),
     user: UserPublic = Depends(current_user),
 ):
-    original_name = Path(file.filename or "").name
+    if (file is None) == (upload_id is None):
+        raise AppError(422, "Укажите исходный файл или идентификатор предварительной загрузки", "INVALID_UPLOAD")
+    staged = owned_upload(upload_id, user.id)[1] if upload_id else None
+    original_name = staged["filename"] if staged else Path(file.filename or "").name
     if not original_name or Path(original_name).suffix.lower() != ".xlsx":
         raise AppError(400, "Поддерживаются только файлы XLSX", "UNSUPPORTED_FILE")
     template = TEMPLATES.get(template_id)
@@ -78,33 +98,46 @@ async def create_transformation(
     directory = settings.storage_path / transformation_id
     directory.mkdir(parents=True, exist_ok=False)
     source_path = directory / "source.xlsx"
+    staged_directory: Path | None = None
     size = 0
     try:
-        with source_path.open("wb") as destination:
-            while chunk := await file.read(1024 * 1024):
-                size += len(chunk)
-                if size > settings.max_upload_bytes:
-                    raise AppError(413, "Файл превышает допустимый размер", "FILE_TOO_LARGE")
-                destination.write(chunk)
-        validate_xlsx(source_path, settings.max_upload_bytes)
+        if upload_id:
+            staged_directory, staged = consume_upload(upload_id, user.id, source_path)
+            size = staged["size_bytes"]
+        else:
+            with source_path.open("wb") as destination:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > settings.max_upload_bytes:
+                        raise AppError(413, "Файл превышает допустимый размер", "FILE_TOO_LARGE")
+                    destination.write(chunk)
+            validate_xlsx(source_path, settings.max_upload_bytes)
+
+        now = utc_now()
+        with connection() as db:
+            db.execute(
+                """
+                INSERT INTO transformations
+                  (id, user_id, source_filename, source_path, data_type, template_id,
+                   status, current_stage, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 'QUEUED', ?, ?)
+                """,
+                (transformation_id, user.id, original_name, str(source_path), data_type.value, template_id, now, now),
+            )
+            row = db.execute("SELECT * FROM transformations WHERE id = ?", (transformation_id,)).fetchone()
     except Exception:
+        if staged_directory and source_path.is_file():
+            try:
+                source_path.replace(staged_directory / "source.xlsx")
+            except OSError:
+                pass
         shutil.rmtree(directory, ignore_errors=True)
         raise
     finally:
-        await file.close()
-
-    now = utc_now()
-    with connection() as db:
-        db.execute(
-            """
-            INSERT INTO transformations
-              (id, user_id, source_filename, source_path, data_type, template_id,
-               status, current_stage, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 'QUEUED', ?, ?)
-            """,
-            (transformation_id, user.id, original_name, str(source_path), data_type.value, template_id, now, now),
-        )
-        row = db.execute("SELECT * FROM transformations WHERE id = ?", (transformation_id,)).fetchone()
+        if file:
+            await file.close()
+    if staged_directory:
+        shutil.rmtree(staged_directory, ignore_errors=True)
     record_audit(
         "TRANSFORMATION_CREATED",
         user_id=user.id,

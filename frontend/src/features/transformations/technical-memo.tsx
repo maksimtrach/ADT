@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Clipboard, Download, ScrollText } from "lucide-react";
 import { useMemo } from "react";
 import { Button } from "../../components/ui/button";
-import { Card, CardHeader } from "../../components/ui/card";
+import { CardHeader } from "../../components/ui/card";
 import { ErrorState, SkeletonRows } from "../../components/ui/data-state";
 import { useToast } from "../../components/ui/toast";
 import { api, ApiError } from "../../lib/api";
@@ -175,7 +175,7 @@ export function TechnicalMemo({ transformationId, status }: { transformationId: 
   };
 
   return (
-    <Card className="overflow-hidden">
+    <section className="overflow-hidden border-t" aria-label="Техническое мемо обработки">
       <CardHeader
         title="Техническое мемо обработки"
         description="Файл, исходные строки, правила, запрос и ответ LLM, преобразование и контроль"
@@ -188,6 +188,6 @@ export function TechnicalMemo({ transformationId, status }: { transformationId: 
       ) : (
         <pre className="max-h-[42rem] overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-5 font-mono text-xs leading-5 text-slate-200">{text}</pre>
       )}
-    </Card>
+    </section>
   );
 }
