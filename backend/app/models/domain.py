@@ -22,6 +22,7 @@ class TransformationStatus(StrEnum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class ProcessingStage(StrEnum):
@@ -33,6 +34,7 @@ class ProcessingStage(StrEnum):
     EXPORTING = "EXPORTING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class ControlStatus(StrEnum):
@@ -102,6 +104,7 @@ class HierarchyRule(BaseModel):
 class TransformationSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    schema_version: Literal[1] = 1
     sheet_name: str
     header_row: int = Field(ge=1)
     header_start_row: int | None = Field(default=None, ge=1)

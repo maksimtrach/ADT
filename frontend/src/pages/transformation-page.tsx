@@ -5,6 +5,7 @@ import {
   Check,
   Download,
   FileSpreadsheet,
+  Plus,
   RefreshCw,
   RotateCcw,
   Send,
@@ -20,7 +21,7 @@ import { Select, Textarea } from "../components/ui/input";
 import { useToast } from "../components/ui/toast";
 import { TechnicalMemo } from "../features/transformations/technical-memo";
 import { api, ApiError, downloadResult } from "../lib/api";
-import type { DataType, PreviewResponse, SourcePreview, TemplateInfo, TransformationDetail, TransformationSummary } from "../lib/types";
+import type { DataType, DocumentProfile, PreviewResponse, SourcePreview, TemplateInfo, TransformationDetail, TransformationSummary } from "../lib/types";
 
 const stages = [
   ["PROFILING", "Анализ структуры файла"],
@@ -63,6 +64,7 @@ export function TransformationPage() {
   }, []);
 
   const templates = useQuery({ queryKey: ["templates"], queryFn: () => api<TemplateInfo[]>("/transformations/templates") });
+  const profiles = useQuery({ queryKey: ["document-profiles"], queryFn: () => api<DocumentProfile[]>("/transformations/document-profiles") });
   const current = useQuery({
     queryKey: ["transformation", selectedId],
     queryFn: () => api<TransformationDetail>(`/transformations/${selectedId}`),
@@ -76,7 +78,7 @@ export function TransformationPage() {
   });
 
   useEffect(() => {
-    if (current.data?.status === "COMPLETED" || current.data?.status === "FAILED") {
+    if (current.data?.status === "COMPLETED" || current.data?.status === "FAILED" || current.data?.status === "CANCELLED") {
       void queryClient.invalidateQueries({ queryKey: ["transformations"] });
     }
   }, [current.data?.status, queryClient]);
@@ -146,6 +148,15 @@ export function TransformationPage() {
     }
   };
 
+  const saveMemory = useMutation({
+    mutationFn: (id: string) => api(`/document-memory/from-transformation/${id}`, { method: "POST" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["document-memory"] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-cases"] });
+      toast.show("Подход сохранён. Проверьте и подтвердите его в разделе «Память обработки».");
+    },
+    onError: (error: Error) => toast.show(error.message, "error"),
+  });
   const upload = useMutation({
     mutationFn: async () => {
       if (!sourcePreview) throw new Error("Дождитесь предварительной загрузки файла");
@@ -159,9 +170,6 @@ export function TransformationPage() {
       uploadGeneration.current += 1;
       sheetGeneration.current += 1;
       stagedUploadId.current = null;
-      setFile(null);
-      setSourcePreview(null);
-      setSelectedSourceSheet("");
       navigate(`/transformations/${item.id}`);
       setFeedback("");
       toast.show("Файл принят в обработку");
@@ -189,12 +197,52 @@ export function TransformationPage() {
     },
     onError: (error) => toast.show(error.message, "error"),
   });
+  function clearWorkspace() {
+    uploadGeneration.current += 1;
+    sheetGeneration.current += 1;
+    if (stagedUploadId.current) discardStagedUpload(stagedUploadId.current);
+    stagedUploadId.current = null;
+    setFile(null);
+    setSourcePreview(null);
+    setSourcePreviewLoading(false);
+    setSourcePreviewError(null);
+    setSelectedSourceSheet("");
+    setSheetLoading(false);
+    setDragging(false);
+    setDataType("TRIAL_BALANCE");
+    setTemplateId(templates.data?.find((item) => item.data_type === "TRIAL_BALANCE")?.id ?? "trial_balance_flat_v1");
+    setFeedback("");
+    upload.reset();
+    retry.reset();
+    navigate("/transformations");
+  }
+  const cancel = useMutation({
+    mutationFn: (id: string) => api<TransformationDetail>("/transformations/" + id + "/cancel", { method: "POST" }),
+    onSuccess: (item) => {
+      queryClient.setQueryData(["transformation", item.id], item);
+      void queryClient.invalidateQueries({ queryKey: ["transformations"] });
+      void queryClient.invalidateQueries({ queryKey: ["transformation-memo", item.id] });
+      clearWorkspace();
+      toast.show("Преобразование прервано");
+    },
+    onError: (error: Error) => {
+      if (error instanceof ApiError && error.code === "TRANSFORMATION_NOT_ACTIVE") {
+        void queryClient.invalidateQueries({ queryKey: ["transformations"] });
+        clearWorkspace();
+        toast.show("Обработка уже завершилась. Открыта новая форма.");
+      } else toast.show(error.message, "error");
+    },
+  });
   const download = async (item: TransformationSummary) => {
     try { await downloadResult(item.id, `${item.source_filename.replace(/\.xlsx$/i, "")}-result.xlsx`); }
     catch (error) { toast.show(error instanceof Error ? error.message : "Не удалось скачать файл", "error"); }
   };
   const processing = current.data?.status === "QUEUED" || current.data?.status === "RUNNING";
   const retryDisabled = retry.isPending || processing || !current.data;
+  const startNewTransformation = () => {
+    if (selectedId && processing) cancel.mutate(selectedId);
+    else clearWorkspace();
+  };
 
   return (
     <div className="space-y-6">
@@ -202,6 +250,13 @@ export function TransformationPage() {
         <div><p className="text-xs font-bold uppercase tracking-widest text-action">Рабочая область преобразования</p><h1 className="mt-1 font-display text-3xl font-bold text-navy">Конструктор расшифровок</h1><p className="mt-1 text-sm text-slate-500">Преобразование нестандартных бухгалтерских выгрузок в плоские таблицы</p></div>
         <div className="flex items-center gap-2 rounded border bg-white px-3 py-2 text-xs text-slate-600"><Bot className="h-4 w-4 text-action" />Правила · LLM при необходимости</div>
       </header>
+
+      <div className="flex justify-start">
+        <Button variant="secondary" loading={cancel.isPending} onClick={startNewTransformation}>
+          {!cancel.isPending && <Plus className="h-4 w-4" />}
+          {cancel.isPending ? "Прерывание…" : "Новое преобразование"}
+        </Button>
+      </div>
 
       <Card>
           <CardHeader title="1. Загрузка файла" description="Выберите исходную книгу Excel" />
@@ -224,7 +279,7 @@ export function TransformationPage() {
                 </div>
                 {sourcePreview && sourcePreview.sheets.length > 1 && <div className="min-w-48">
                   <label className="field-label" htmlFor="source-sheet">Лист для просмотра</label>
-                  <Select id="source-sheet" value={selectedSourceSheet} disabled={sheetLoading} onChange={(event) => void chooseSourceSheet(event.target.value)}>
+                  <Select id="source-sheet" value={selectedSourceSheet} disabled={sheetLoading || Boolean(selectedId)} onChange={(event) => void chooseSourceSheet(event.target.value)}>
                     {sourcePreview.sheets.map((sheet) => <option key={sheet} value={sheet}>{sheet}</option>)}
                   </Select>
                 </div>}
@@ -254,11 +309,11 @@ export function TransformationPage() {
           <CardHeader title="2. Параметры преобразования" description="Укажите тип исходных данных и целевой формат" />
           <div className="space-y-5 p-5">
             <div className="grid gap-4 md:grid-cols-2">
-              <div><label className="field-label">Тип исходных данных</label><Select value={dataType} onChange={(event) => chooseType(event.target.value as DataType)}><option value="TRIAL_BALANCE">Оборотно-сальдовая ведомость</option><option value="JOURNAL">Журнал проводок</option></Select></div>
+              <div><label className="field-label">Тип исходных данных</label><Select value={dataType} onChange={(event) => chooseType(event.target.value as DataType)}>{profiles.data?.length ? profiles.data.map((profile) => <option key={profile.id} value={profile.data_type ?? profile.id} disabled={!profile.available}>{profile.name}{profile.available ? "" : " — запланирован"}</option>) : <><option value="TRIAL_BALANCE">Общая ОСВ</option><option value="JOURNAL">Журнал проводок</option></>}</Select></div>
               <div><label className="field-label">Целевой формат</label><Select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{availableTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></div>
             </div>
             {selectedTemplate && <div className="rounded border bg-slate-50 p-3"><p className="text-sm text-slate-600">{selectedTemplate.description}</p><p className="mt-2 text-xs text-slate-500">Поля: {selectedTemplate.columns.map((column) => column.label).join(" · ")}</p></div>}
-            <Button className="w-full md:w-auto" disabled={!sourcePreview || !templateId || sourcePreviewLoading || sheetLoading || upload.isPending} loading={upload.isPending} onClick={() => upload.mutate()}><RefreshCw className="h-4 w-4" />Преобразовать</Button>
+            <Button className="w-full md:w-auto" disabled={!sourcePreview || !templateId || sourcePreviewLoading || sheetLoading || upload.isPending || Boolean(selectedId)} loading={upload.isPending} onClick={() => upload.mutate()}><RefreshCw className="h-4 w-4" />Преобразовать</Button>
           </div>
         </Card>
 
@@ -276,6 +331,7 @@ export function TransformationPage() {
                 })}
               </div>
               {current.data.error_message && <div className="mt-5 flex gap-2 border border-red-200 bg-red-50 p-3 text-sm text-red-700"><AlertTriangle className="h-5 w-5 shrink-0" />{current.data.error_message}</div>}
+              {current.data.status === "CANCELLED" && <div className="mt-5 flex gap-2 border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"><AlertTriangle className="h-5 w-5 shrink-0" />Обработка прервана пользователем. Исходный файл сохранён, преобразование можно запустить повторно.</div>}
             </div>
           )}
       </Card>
@@ -285,7 +341,9 @@ export function TransformationPage() {
               <h2 className="font-display text-lg font-semibold text-navy">4. Результаты преобразования</h2>
               <p className="mt-1 text-sm text-slate-500">{current.data?.status === "COMPLETED" ? `${typeLabels[current.data.data_type]} · версия ${current.data.version}` : "Первые строки преобразованного файла"}</p>
             </div>
-            {current.data?.status === "COMPLETED" && <Button size="sm" className="w-full sm:w-auto" onClick={() => { if (current.data) void download(current.data); }}><Download className="h-4 w-4" />Выгрузить в Excel</Button>}
+            {current.data?.status === "COMPLETED" && <div className="flex flex-wrap gap-2">
+              {current.data.data_type === "TRIAL_BALANCE" && <Button size="sm" variant="secondary" loading={saveMemory.isPending} onClick={() => { if (current.data) saveMemory.mutate(current.data.id); }}>Сохранить подход в память</Button>}
+              <Button size="sm" className="w-full sm:w-auto" onClick={() => { if (current.data) void download(current.data); }}><Download className="h-4 w-4" />Выгрузить в Excel</Button></div>}
           </div>
           {current.data?.status === "COMPLETED" ? <>
           <div className="grid gap-px border-b bg-slate-200 sm:grid-cols-2 lg:grid-cols-4">
@@ -295,8 +353,8 @@ export function TransformationPage() {
             <div className="bg-white p-5"><p className="text-xs text-slate-500">Планировщик</p><p className="mt-2 text-sm font-semibold text-navy">{current.data.llm_used ? "LLM + правила" : "Детерминированные правила"}</p></div>
           </div>
           {current.data.warnings.length > 0 && <div className="border-b bg-amber-50 px-5 py-4"><div className="flex gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><div><p className="text-sm font-semibold text-amber-900">Замечания контроля</p><ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-800">{current.data.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div></div></div>}
-          {preview.isLoading ? <SkeletonRows count={6} /> : preview.isError ? <div className="p-5"><ErrorState message={preview.error.message} /></div> : preview.data && <><div className="max-h-[32rem] overflow-auto" role="region" aria-label="Первые строки результата" tabIndex={0}><table className="data-table"><thead><tr>{preview.data.columns.map((column) => <th key={column.key} className="sticky top-0 z-10 bg-slate-50">{column.label}</th>)}<th className="sticky top-0 z-10 bg-slate-50">Строка источника</th></tr></thead><tbody>{preview.data.rows.map((row, index) => <tr key={index}>{preview.data.columns.map((column) => <td key={column.key} className={column.kind === "number" ? "whitespace-nowrap text-right font-mono text-xs" : "min-w-36"}>{row[column.key] == null ? <span className="text-slate-300">—</span> : String(row[column.key])}</td>)}<td className="font-mono text-xs text-slate-500">{String(row._source_row ?? "")}</td></tr>)}</tbody></table></div><div className="border-t bg-slate-50 px-5 py-3 text-xs text-slate-500">Показаны первые {preview.data.rows.length} из {preview.data.total} записей</div></>}
-          </> : <EmptyState title="Результат пока не готов" description={current.data?.status === "FAILED" ? "Обработка завершилась с ошибкой. Уточните правила в блоке корректировок." : processing ? "Преобразование выполняется." : "Результат появится после преобразования файла."} />}
+          {preview.isLoading ? <SkeletonRows count={6} /> : preview.isError ? <div className="p-5"><ErrorState message={preview.error.message} /></div> : preview.data && <><div className="max-h-[32rem] overflow-auto" role="region" aria-label="Первые строки результата" tabIndex={0}><table className="data-table"><thead><tr>{preview.data.columns.map((column) => <th key={column.key} className={`sticky top-0 z-10 ${column.key === "parent_account" ? "border-l-2 border-slate-300 bg-slate-100" : ["account_level", "row_type", "parent_source_row"].includes(column.key) ? "bg-slate-100" : "bg-slate-50"}`}>{column.label}</th>)}<th className="sticky top-0 z-10 bg-slate-50">Строка источника</th></tr></thead><tbody>{preview.data.rows.map((row, index) => <tr key={index}>{preview.data.columns.map((column) => <td key={column.key} className={`${column.kind === "number" ? "whitespace-nowrap text-right font-mono text-xs" : "min-w-36"} ${column.key === "parent_account" ? "border-l-2 border-slate-200 bg-slate-50/70" : ["account_level", "row_type", "parent_source_row"].includes(column.key) ? "bg-slate-50/70" : ""}`}>{row[column.key] == null ? <span className="text-slate-300">—</span> : String(row[column.key])}</td>)}<td className="font-mono text-xs text-slate-500">{String(row._source_row ?? "")}</td></tr>)}</tbody></table></div><div className="border-t bg-slate-50 px-5 py-3 text-xs text-slate-500">Показаны первые {preview.data.rows.length} из {preview.data.total} записей</div></>}
+          </> : <EmptyState title="Результат пока не готов" description={current.data?.status === "FAILED" ? "Обработка завершилась с ошибкой. Уточните правила в блоке корректировок." : current.data?.status === "CANCELLED" ? "Обработка прервана. Её можно повторить в блоке корректировок." : processing ? "Преобразование выполняется." : "Результат появится после преобразования файла."} />}
         </Card>
 
       <Card>
@@ -304,6 +362,7 @@ export function TransformationPage() {
             title="5. Корректировки"
             description={current.data?.status === "FAILED"
               ? "Уточните структуру файла или правила обработки. Загружать файл заново не требуется."
+              : current.data?.status === "CANCELLED" ? "Обработка прервана. Можно повторно запустить сохранённый исходный файл."
               : processing ? "Обработка выполняется. Повторный запуск будет доступен после её завершения."
               : current.data ? "Уточните правила или повторите обработку сохранённого исходного файла." : "Корректировки станут доступны после первой обработки."}
           />

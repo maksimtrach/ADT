@@ -45,7 +45,7 @@ def record_run_event(
 
 
 def set_run_status(run_id: str, status: str) -> None:
-    finished_at = utc_now() if status in {"COMPLETED", "FAILED"} else None
+    finished_at = utc_now() if status in {"COMPLETED", "FAILED", "CANCELLED"} else None
     with connection() as db:
         db.execute(
             "UPDATE transformation_runs SET status = ?, finished_at = ? WHERE id = ?",

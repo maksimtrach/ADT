@@ -2,7 +2,7 @@
   {
     "account": "50.01",
     "subaccount": null,
-    "analytics": "Касса",
+    "account_name": "Касса",
     "opening_debit": 1000.0,
     "opening_credit": null,
     "turnover_debit": 500.0,
@@ -13,7 +13,7 @@
   {
     "account": "51",
     "subaccount": "51.01",
-    "analytics": "Основной счет",
+    "account_name": "Основной счет",
     "opening_debit": 15000.0,
     "opening_credit": null,
     "turnover_debit": 2500.0,
@@ -24,7 +24,7 @@
   {
     "account": "60.01",
     "subaccount": null,
-    "analytics": "Поставщик Альфа",
+    "account_name": "Поставщик Альфа",
     "opening_debit": null,
     "opening_credit": 2000.0,
     "turnover_debit": 7500.0,

@@ -158,6 +158,7 @@ def test_openai_compatible_planner_uses_json_schema(monkeypatch):
     assert result == baseline
     assert posted["url"] == "http://192.168.1.65:1234/v1/chat/completions"
     assert posted["json"]["model"] == "qwen/qwen3.5-9b"
+    assert posted["client_kwargs"]["timeout"].connect == 10
     assert "think" not in posted["json"]
     assert not posted["json"]["messages"][1]["content"].endswith("/no_think")
     response_format = posted["json"]["response_format"]

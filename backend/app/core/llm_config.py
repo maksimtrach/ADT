@@ -26,6 +26,7 @@ class LLMProfile(BaseModel):
     base_url: str
     model: str
     timeout_seconds: int = Field(default=180, ge=1)
+    connect_timeout_seconds: int = Field(default=10, ge=1)
     thinking: bool = False
     no_think_suffix: bool = False
     keep_alive: str | None = None

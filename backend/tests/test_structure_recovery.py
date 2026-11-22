@@ -12,7 +12,7 @@ from backend.app.services.hypothesis_planner import choose_plan, PlanSelection, 
 from backend.app.services.llm.base import LLMCallResult
 from backend.app.services.planner import LLMPlanner
 from backend.app.services.rule_planner import standard_money_mapping
-from backend.app.services.structure_recovery import recovery_profile, StructureAnswer
+from backend.app.services.structure_recovery import build_recovered_spec, recovery_profile, StructureAnswer, StructureLayout
 
 
 def recovery_workbook(path):
@@ -112,6 +112,30 @@ def test_structure_schema_requires_positive_column_numbers_and_allows_null():
     answer = answer_layout()
     answer["layout"]["column_mapping"]["subaccount"] = None
     assert StructureAnswer.model_validate(answer).layout.column_mapping["account"] == 1
+
+
+def test_llm_account_tree_allows_missing_account_name(tmp_path):
+    path = tmp_path / "code-tree-recovery.xlsx"
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "ОСВ"
+    sheet.append(["Счет", "Начало Дт", "Начало Кт", "Оборот Дт", "Оборот Кт", "Конец Дт", "Конец Кт"])
+    sheet.append(["01", 100, 0, 20, 10, 110, 0])
+    sheet.append(["01.01", 100, 0, 20, 10, 110, 0])
+    book.save(path)
+    book.close()
+    source = SourceStructure(path)
+    try:
+        layout = StructureLayout(
+            sheet_name="ОСВ", header_start_row=1, header_end_row=1, data_start_row=2, data_end_row=3,
+            row_mode="account_tree", column_mapping={"account": 1, **dict(zip(MONEY_KEYS, range(2, 8)))},
+        )
+        spec = build_recovered_spec(layout, source, DataType.TRIAL_BALANCE, "trial_balance_flat_v1")
+    finally:
+        source.close()
+    assert spec.row_rules.account_tree
+    assert not spec.row_rules.classify_account_rows
+    assert spec.column_mapping["account_name"] is None
 
 
 def test_bad_source_arithmetic_is_not_overridden_by_model(tmp_path, monkeypatch):

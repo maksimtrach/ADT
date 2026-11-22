@@ -21,12 +21,14 @@ from backend.app.models.domain import (
     UserRole,
 )
 from backend.app.services.file_profiler import validate_xlsx
+from backend.app.services.account_structure import SERVICE_COLUMNS
 from backend.app.services.pipeline import process_transformation
 from backend.app.services.planner import LLMPlanner
 from backend.app.services.feedback_rules import explicit_column_feedback
-from backend.app.services.processing_log import create_processing_run
+from backend.app.services.processing_log import create_processing_run, record_run_event
 from backend.app.services.source_uploads import consume_upload, discard_upload, owned_upload, source_preview, stage_upload
 from backend.app.services.templates import TEMPLATES
+from backend.app.services.document_profiles import PROFILES, profile_for
 
 
 router = APIRouter(prefix="/transformations", tags=["transformations"])
@@ -58,6 +60,11 @@ def _detail(row) -> TransformationDetail:
 @router.get("/templates")
 def templates(user: UserPublic = Depends(current_user)):
     return {"data": list(TEMPLATES.values())}
+
+
+@router.get("/document-profiles")
+def document_profiles(user: UserPublic = Depends(current_user)):
+    return {"data": [profile.public() for profile in PROFILES]}
 
 
 @router.post("/source-uploads")
@@ -93,6 +100,7 @@ async def create_transformation(
     template = TEMPLATES.get(template_id)
     if not template or template.data_type != data_type:
         raise AppError(400, "Выбран несовместимый целевой формат", "INVALID_TEMPLATE")
+    profile_for(data_type, template_id)
 
     transformation_id = str(uuid4())
     directory = settings.storage_path / transformation_id
@@ -224,8 +232,14 @@ def preview(transformation_id: str, user: UserPublic = Depends(current_user)):
             (transformation_id, row["current_version"]),
         ).fetchone()
     spec = json_load(version["spec_json"], {})
+    columns = spec.get("target_columns", [])
+    existing_keys = {column.get("key") for column in columns}
+    columns = [
+        *columns,
+        *(column.model_dump(mode="json") for column in SERVICE_COLUMNS if column.key not in existing_keys),
+    ]
     payload = PreviewResponse(
-        columns=spec.get("target_columns", []),
+        columns=columns,
         rows=json_load(version["preview_json"], []),
         total=version["processed_rows"],
         version=version["version"],
@@ -249,6 +263,65 @@ def download(transformation_id: str, user: UserPublic = Depends(current_user)):
     record_audit("RESULT_DOWNLOADED", user_id=user.id, entity_type="TRANSFORMATION", entity_id=transformation_id)
     filename = f"{Path(row['source_filename']).stem}-result-v{row['current_version']}.xlsx"
     return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=filename)
+
+
+@router.post("/{transformation_id}/cancel")
+def cancel(transformation_id: str, user: UserPublic = Depends(current_user)):
+    row = _owned_row(transformation_id, user)
+    if row["status"] == "CANCELLED":
+        return {"data": _detail(row)}
+    if row["status"] not in ("QUEUED", "RUNNING"):
+        raise AppError(409, "Преобразование уже завершено", "TRANSFORMATION_NOT_ACTIVE")
+
+    run = None
+    with connection() as db:
+        changed = db.execute(
+            """
+            UPDATE transformations
+            SET status = 'CANCELLED', current_stage = 'CANCELLED',
+                error_message = NULL, updated_at = ?
+            WHERE id = ? AND status IN ('QUEUED', 'RUNNING')
+            """,
+            (utc_now(), transformation_id),
+        )
+        current = db.execute("SELECT * FROM transformations WHERE id = ?", (transformation_id,)).fetchone()
+        if changed.rowcount:
+            run = db.execute(
+                """
+                SELECT * FROM transformation_runs
+                WHERE transformation_id = ? AND status IN ('QUEUED', 'RUNNING')
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (transformation_id,),
+            ).fetchone()
+            if run:
+                db.execute(
+                    "UPDATE transformation_runs SET status = 'CANCELLED', finished_at = ? WHERE id = ?",
+                    (utc_now(), run["id"]),
+                )
+
+    if not changed.rowcount:
+        if current["status"] == "CANCELLED":
+            return {"data": _detail(current)}
+        raise AppError(409, "Преобразование уже завершено", "TRANSFORMATION_NOT_ACTIVE")
+
+    if run:
+        record_run_event(
+            run["id"],
+            transformation_id,
+            "CANCELLED",
+            "PROCESSING_CANCELLED",
+            {"reason": "Пользователь начал новое преобразование"},
+            level="WARNING",
+        )
+    record_audit(
+        "TRANSFORMATION_CANCELLED",
+        user_id=user.id,
+        entity_type="TRANSFORMATION",
+        entity_id=transformation_id,
+        details={"previousStatus": row["status"]},
+    )
+    return {"data": _detail(current)}
 
 
 @router.post("/{transformation_id}/retry")

@@ -92,7 +92,7 @@ def test_llm_flat_with_name_is_normalized_and_total_retained(missing_header_file
     try:
         layout = StructureLayout(sheet_name="ОСВ", header_start_row=1, header_end_row=2,
                                  data_start_row=3, data_end_row=data_end, row_mode="flat",
-                                 column_mapping={**MAPPING, "analytics": None, "subaccount": None})
+                                 column_mapping={**MAPPING, "subaccount": None})
         spec = build_recovered_spec(layout, source, DataType.TRIAL_BALANCE, "trial_balance_flat_v1")
         assert spec.row_rules.account_tree
         assert spec.control_rows == [13]

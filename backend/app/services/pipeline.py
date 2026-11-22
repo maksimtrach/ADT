@@ -7,13 +7,15 @@ from backend.app.db.database import connection, json_dump, json_load, record_aud
 from backend.app.models.domain import DataType, ProcessingStage, TransformationSpec
 from backend.app.services.exporter import export_result
 from backend.app.services.file_profiler import profile_workbook
-from backend.app.services.parser import parse_workbook
 from backend.app.services.planner import LLMPlanner
 from backend.app.services.processing_log import create_processing_run, record_run_event, set_run_status
-from backend.app.services.validator import validate_result
-from backend.app.services.hypothesis_planner import choose_plan, SourceStructure, PlanSelection
+from backend.app.services.hypothesis_planner import SourceStructure, PlanSelection
 from backend.app.services.feedback_rules import explicit_column_feedback
 from backend.app.services.explicit_layout import complete_mapping, plan_from_explicit_mapping
+from backend.app.core.config import settings
+from backend.app.services.document_profiles import profile_for
+from backend.app.services.document_memory import MemoryStore, MemoryCase
+from backend.app.services.memory_planner import capture_card, memory_plan
 
 
 def baseline_is_reliable(spec: TransformationSpec, validation: dict) -> bool:
@@ -33,12 +35,24 @@ def baseline_is_reliable(spec: TransformationSpec, validation: dict) -> bool:
     )
 
 
+class ProcessingCancelled(Exception):
+    pass
+
+
 def _set_stage(transformation_id: str, stage: ProcessingStage) -> None:
     with connection() as db:
-        db.execute(
-            "UPDATE transformations SET status = 'RUNNING', current_stage = ?, updated_at = ? WHERE id = ?",
+        changed = db.execute(
+            """
+            UPDATE transformations SET status = 'RUNNING', current_stage = ?, updated_at = ?
+            WHERE id = ? AND status IN ('QUEUED', 'RUNNING')
+            """,
             (stage.value, utc_now(), transformation_id),
         )
+        if not changed.rowcount:
+            status = db.execute("SELECT status FROM transformations WHERE id = ?", (transformation_id,)).fetchone()
+            if status and status["status"] == "CANCELLED":
+                raise ProcessingCancelled
+            raise RuntimeError("Преобразование не находится в активном состоянии")
 
 
 def process_transformation(
@@ -55,6 +69,8 @@ def process_transformation(
         template_id = transformation["template_id"]
         user_id = transformation["user_id"]
         previous_version = transformation["current_version"]
+        if transformation["status"] == "CANCELLED":
+            return
 
     run_id = run_id or create_processing_run(transformation_id, previous_version + 1, feedback)
     set_run_status(run_id, "RUNNING")
@@ -72,7 +88,28 @@ def process_transformation(
         },
     )
     llm_used = False
+    memory_used = False
+    document_profile = profile_for(data_type, template_id)
+
+    def remember(outcome, reason, spec=None, validation=None, row_count=0):
+        if not settings.document_memory_enabled or not document_profile.memory_enabled:
+            return
+        try:
+            card = capture_card(source_path, spec, validation, row_count) if spec else None
+            case = MemoryCase(owner_id=user_id, transformation_id=transformation_id, run_id=run_id,
+                              outcome="unsupported" if spec and card is None else outcome, reason=reason)
+            saved = MemoryStore().save_case(case, card)
+            record_run_event(run_id, transformation_id, ProcessingStage.PLANNING.value,
+                             "MEMORY_CASE_SAVED", {"case_id": str(case.id), "outcome": case.outcome,
+                             "card_id": str(saved.id) if saved else None,
+                             "revision": saved.revision if saved else None})
+        except Exception as error:
+            record_run_event(run_id, transformation_id, ProcessingStage.PLANNING.value,
+                             "MEMORY_UNAVAILABLE", {"operation": "save", "error_type": type(error).__name__},
+                             level="WARNING")
+
     extra_warnings: list[str] = []
+    result_path: Path | None = None
     try:
         _set_stage(transformation_id, ProcessingStage.PROFILING)
         profile = profile_workbook(source_path)
@@ -112,6 +149,8 @@ def process_transformation(
         )
 
         _set_stage(transformation_id, ProcessingStage.PLANNING)
+        record_run_event(run_id, transformation_id, ProcessingStage.PLANNING.value,
+                         "DOCUMENT_PROFILE_SELECTED", document_profile.public())
         planner = LLMPlanner()
         trace = lambda event_type, details: record_run_event(
             run_id, transformation_id, ProcessingStage.PLANNING.value, event_type, details,
@@ -132,13 +171,22 @@ def process_transformation(
             explicit_mapping = explicit_column_feedback(feedback)
             selection = (plan_from_explicit_mapping(source_path, data_type, template_id, explicit_mapping)
                          if data_type == DataType.TRIAL_BALANCE and complete_mapping(explicit_mapping)
-                         else choose_plan(source_path, data_type, template_id))
+                         else document_profile.plan(source_path, template_id))
         except AppError as error:
             if error.code != "STRUCTURE_NOT_RECOGNIZED":
                 raise
             selection = PlanSelection([], False, 0)
         record_run_event(run_id, transformation_id, ProcessingStage.PLANNING.value,
                          "HYPOTHESES_EVALUATED", selection.summary())
+        if (settings.document_memory_enabled and document_profile.memory_enabled
+                and not selection.confident and not feedback):
+            try:
+                remembered = memory_plan(source_path, user_id, template_id, trace)
+                if remembered:
+                    selection = PlanSelection([remembered], True, 100)
+                    memory_used = True
+            except Exception as error:
+                trace("MEMORY_UNAVAILABLE", {"operation": "search", "error_type": type(error).__name__})
         recovered_initially = not selection.candidates
         if recovered_initially:
             selection = PlanSelection([recover_structure(selection)], True, 100)
@@ -167,8 +215,8 @@ def process_transformation(
             "BASELINE_SPEC_CREATED",
             {"spec": baseline.model_dump(mode="json")},
         )
-        baseline_parsed = parse_workbook(source_path, baseline, data_type)
-        baseline_validation = validate_result(baseline_parsed, baseline)
+        baseline_parsed = document_profile.parse(source_path, baseline)
+        baseline_validation = document_profile.validate(baseline_parsed, baseline)
         reliable_baseline = selection.confident and (
             baseline_is_reliable(baseline, baseline_validation) or data_type == DataType.JOURNAL
         )
@@ -223,8 +271,8 @@ def process_transformation(
                                + error.message, "STRUCTURE_AMBIGUOUS") from error
 
         _set_stage(transformation_id, ProcessingStage.TRANSFORMING)
-        parsed = parse_workbook(source_path, spec, data_type) if llm_used or explicit_applied else baseline_parsed
-        candidate_validation = validate_result(parsed, spec)
+        parsed = document_profile.parse(source_path, spec) if llm_used or explicit_applied else baseline_parsed
+        candidate_validation = document_profile.validate(parsed, spec)
         bad_candidate = (
             not parsed.rows
             or candidate_validation["status"] == "FAILED"
@@ -284,7 +332,7 @@ def process_transformation(
         )
 
         _set_stage(transformation_id, ProcessingStage.VALIDATING)
-        validation = validate_result(parsed, spec)
+        validation = document_profile.validate(parsed, spec)
         validation["warnings"] = list(dict.fromkeys(validation["warnings"] + extra_warnings))
         record_run_event(
             run_id,
@@ -299,6 +347,7 @@ def process_transformation(
         version = previous_version + 1
         result_path = source_path.parent / f"result-v{version}.xlsx"
         export_result(result_path, parsed.rows, spec, validation)
+        _set_stage(transformation_id, ProcessingStage.EXPORTING)
         record_run_event(
             run_id,
             transformation_id,
@@ -313,6 +362,12 @@ def process_transformation(
         preview = [{key: value for key, value in row.items() if key != "_source_refs"} for row in parsed.rows[:100]]
 
         with connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            state = db.execute("SELECT status FROM transformations WHERE id = ?", (transformation_id,)).fetchone()
+            if not state or state["status"] == "CANCELLED":
+                raise ProcessingCancelled
+            if state["status"] not in ("QUEUED", "RUNNING"):
+                raise RuntimeError(f"Недопустимый статус перед сохранением результата: {state['status']}")
             db.execute(
                 """
                 INSERT INTO transformation_versions
@@ -387,16 +442,38 @@ def process_transformation(
             },
         )
         set_run_status(run_id, "COMPLETED")
+        nontrivial_deterministic = (
+            spec.row_rules.account_tree and not spec.row_rules.classify_account_rows
+        ) or bool(validation.get("scope_excluded_rows"))
+        if (llm_used or feedback or nontrivial_deterministic) and not memory_used:
+            reason = (
+                "Сложный детерминированный подход: дерево кодов или отдельная область сверки"
+                if nontrivial_deterministic and not (llm_used or feedback)
+                else "Решение после LLM или уточнения пользователя"
+            )
+            remember("resolved", reason, spec, validation, len(parsed.rows))
+    except ProcessingCancelled:
+        if result_path and result_path.is_file():
+            result_path.unlink()
+        set_run_status(run_id, "CANCELLED")
+        return
     except Exception as error:
         message = error.message if isinstance(error, AppError) else "Ошибка обработки файла"
         with connection() as db:
-            db.execute(
+            failed = db.execute(
                 """
                 UPDATE transformations SET status = 'FAILED', current_stage = 'FAILED',
-                    error_message = ?, updated_at = ? WHERE id = ?
+                    error_message = ?, updated_at = ?
+                WHERE id = ? AND status IN ('QUEUED', 'RUNNING')
                 """,
                 (message, utc_now(), transformation_id),
             )
+            state = db.execute("SELECT status FROM transformations WHERE id = ?", (transformation_id,)).fetchone()
+        if not failed.rowcount and state and state["status"] == "CANCELLED":
+            if result_path and result_path.is_file():
+                result_path.unlink()
+            set_run_status(run_id, "CANCELLED")
+            return
         record_audit(
             "TRANSFORMATION_FAILED",
             user_id=user_id,
@@ -418,3 +495,4 @@ def process_transformation(
             level="ERROR",
         )
         set_run_status(run_id, "FAILED")
+        remember("failed", error.code if isinstance(error, AppError) else type(error).__name__)

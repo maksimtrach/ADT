@@ -67,7 +67,12 @@ beforeEach(() => {
   };
   request.mockImplementation(async (path: string) => {
     if (path === "/transformations/templates") return [];
+    if (path === "/transformations/document-profiles") return [];
     if (path.endsWith("/retry")) return retryRequest();
+    if (path.endsWith("/cancel")) {
+      detail = { ...detail, status: "CANCELLED", current_stage: "CANCELLED", error_message: undefined };
+      return detail;
+    }
     if (path.endsWith("/preview")) return { columns: [], rows: [], total: 0, version: detail.version };
     if (path === "/transformations/test") return detail;
     throw new Error(`Неожиданный запрос: ${path}`);
@@ -78,6 +83,30 @@ afterEach(async () => {
   await act(async () => root.unmount());
   client.clear();
   container.remove();
+});
+
+describe("Новое преобразование", () => {
+  it("прерывает активную обработку перед очисткой формы", async () => {
+    detail = { ...detail, status: "RUNNING", current_stage: "PLANNING", error_message: undefined };
+    await mount();
+    expect(button("Новое преобразование")).toBeDefined();
+    await act(async () => button("Новое преобразование").click());
+    await settle();
+    expect(request).toHaveBeenCalledWith("/transformations/test/cancel", { method: "POST" });
+    expect(showToast).toHaveBeenCalledWith("Преобразование прервано");
+    expect(textarea().disabled).toBe(true);
+    expect(container.textContent).toContain("Обработка не запущена");
+  });
+
+  it("очищает завершённое состояние без запроса отмены", async () => {
+    await mount();
+    await enterComment("Черновик");
+    await act(async () => button("Новое преобразование").click());
+    await settle();
+    expect(request.mock.calls.some(([path]) => path.endsWith("/cancel"))).toBe(false);
+    expect(textarea().value).toBe("");
+    expect(textarea().disabled).toBe(true);
+  });
 });
 
 describe("Повторная обработка", () => {
@@ -173,8 +202,14 @@ describe("Вертикальная компоновка", () => {
       if (path === "/transformations/templates") return [];
       if (path === "/transformations/test") return detail;
       if (path.endsWith("/preview")) return {
-        columns: [{ key: "account", label: "Счет", kind: "text", required: true }],
-        rows: [{ account: "01", _source_row: 8 }], total: 120, version: 1,
+        columns: [
+          { key: "account", label: "Счет", kind: "text", required: true },
+          { key: "parent_account", label: "Родительский счёт", kind: "text", required: false },
+          { key: "account_level", label: "Уровень счёта", kind: "text", required: false },
+          { key: "row_type", label: "Тип строки", kind: "text", required: false },
+          { key: "parent_source_row", label: "Строка родительского счёта", kind: "text", required: false },
+        ],
+        rows: [{ account: "01", parent_account: null, account_level: "1", row_type: "Детальный счёт", parent_source_row: null, _source_row: 8 }], total: 120, version: 1,
       };
       throw new Error(`Неожиданный запрос: ${path}`);
     });
@@ -186,6 +221,12 @@ describe("Вертикальная компоновка", () => {
     expect(region?.className).toContain("max-h-[32rem]");
     expect(region?.querySelector("th")?.className).toContain("sticky");
     expect(region?.textContent).toContain("01");
+    expect(region?.textContent).toContain("Родительский счёт");
+    expect(region?.textContent).toContain("Уровень счёта");
+    expect(region?.textContent).toContain("Тип строки");
+    expect(region?.textContent).toContain("Строка родительского счёта");
+    expect(region?.textContent).toContain("Детальный счёт");
+    expect(region?.querySelector("th:nth-child(2)")?.className).toContain("border-l-2");
     expect(container.textContent).toContain("Показаны первые 1 из 120 записей");
   });
 });
@@ -235,6 +276,11 @@ describe("Предпросмотр исходного файла", () => {
     const body = create?.[1]?.body as FormData;
     expect(body.get("upload_id")).toBe("staged-1");
     expect(body.get("file")).toBeNull();
+    await settle();
+    expect(container.querySelector('[aria-label="Предпросмотр исходного файла"]')?.textContent).toContain("Другой лист");
+    expect(container.textContent).toContain("source.xlsx");
+    expect(button("Преобразовать").disabled).toBe(true);
+    expect(container.querySelector<HTMLSelectElement>("#source-sheet")?.disabled).toBe(true);
   });
 
   it("оставляет преобразование недоступным, если предварительное чтение файла завершилось ошибкой", async () => {

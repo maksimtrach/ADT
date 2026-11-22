@@ -1,6 +1,6 @@
-# Выберите профиль здесь или через переменную окружения LLM_PROFILE.
-active_profile = "remote_qwen35"
-fallback_profiles = ["local_ollama"]
+# Управляется через административную страницу настроек LLM.
+active_profile = "local_ollama"
+fallback_profiles = []
 
 [profiles.local_ollama]
 enabled = true
@@ -8,12 +8,14 @@ protocol = "ollama"
 base_url = "http://127.0.0.1:11434"
 model = "max-gpu-qwen:latest"
 timeout_seconds = 180
+connect_timeout_seconds = 5
 thinking = false
 no_think_suffix = true
+structured_output = true
 keep_alive = "10m"
 
 [profiles.local_ollama.generation]
-temperature = 0
+temperature = 0.0
 max_tokens = 1800
 context_size = 16384
 
@@ -23,10 +25,12 @@ protocol = "openai"
 base_url = "http://192.168.1.65:1234/v1"
 model = "qwen/qwen3.5-9b"
 timeout_seconds = 180
+connect_timeout_seconds = 5
 thinking = false
-no_think_suffix = false
+no_think_suffix = true
 structured_output = true
 
 [profiles.remote_qwen35.generation]
-temperature = 0
+temperature = 0.0
 max_tokens = 1800
+context_size = 16384

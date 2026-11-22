@@ -9,6 +9,14 @@ import { api, ApiError } from "../../lib/api";
 import type { TransformationMemo, TransformationRunEvent, TransformationStatus } from "../../lib/types";
 
 const eventLabels: Record<string, string> = {
+  DOCUMENT_PROFILE_SELECTED: "Выбран профиль документа",
+  MEMORY_SEARCH: "Поиск подходов в памяти",
+  MEMORY_CANDIDATE_CHECKED: "Проверка подхода из памяти на текущем файле",
+  MEMORY_APPLIED: "Применён подход из памяти",
+  MEMORY_REJECTED: "Подход из памяти не прошёл проверку",
+  MEMORY_AMBIGUOUS: "Память содержит неоднозначные подходы",
+  MEMORY_CASE_SAVED: "Случай сохранён в памяти",
+  MEMORY_UNAVAILABLE: "Память недоступна; используется обычная обработка",
   FILE_OPENED: "Файл открыт",
   PROFILE_CREATED: "Профиль книги сформирован",
   SOURCE_SAMPLE: "Первые строки исходного файла",
@@ -37,6 +45,7 @@ const eventLabels: Record<string, string> = {
   RESULT_EXPORTED: "Выходной файл сформирован",
   PROCESSING_COMPLETED: "Обработка завершена",
   PROCESSING_FAILED: "Обработка завершилась ошибкой",
+  PROCESSING_CANCELLED: "Обработка прервана пользователем",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

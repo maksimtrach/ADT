@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, FileClock, FileSpreadsheet, History, LogOut, Menu, ShieldCheck, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileClock, FileSpreadsheet, History, LogOut, Menu, Settings, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../../features/auth/auth-context";
@@ -16,7 +16,11 @@ export function AppShell() {
   const nav = [
     { to: "/transformations", label: "Преобразования", icon: FileSpreadsheet },
     { to: "/history", label: "История", icon: History },
-    ...(user?.role === "ADMIN" ? [{ to: "/audit-log", label: "Журнал действий", icon: FileClock }] : []),
+    { to: "/document-memory", label: "Память обработки", icon: FileSpreadsheet },
+    ...(user?.role === "ADMIN" ? [
+      { to: "/llm-settings", label: "Настройки LLM", icon: Settings },
+      { to: "/audit-log", label: "Журнал действий", icon: FileClock },
+    ] : []),
   ];
   const sidebar = (isCollapsed: boolean) => (
     <aside className={cn("flex h-full flex-col bg-navy text-white transition-[width] duration-200", isCollapsed ? "w-18" : "w-64")}>

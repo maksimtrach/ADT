@@ -1,7 +1,7 @@
 """A complete user mapping can define a table even if its header is missing."""
 from backend.app.core.errors import AppError
 from backend.app.models.domain import RowRules, TransformationSpec
-from backend.app.services.account_structure import ACCOUNT_CODE, MONEY_KEYS, account_columns
+from backend.app.services.account_structure import ACCOUNT_CODE, MONEY_KEYS
 from backend.app.services.hypothesis_planner import SourceStructure, PlanSelection
 from backend.app.services.table_regions import is_blank, trailing_control
 from backend.app.services.templates import get_template
@@ -26,7 +26,7 @@ def plan_from_explicit_mapping(path, data_type, template_id, mapping):
             if start is None:
                 continue
             control = trailing_control(sheet, mapping, start, end)
-            columns = account_columns(get_template(template_id).columns)
+            columns = get_template(template_id).columns
             spec = TransformationSpec(
                 sheet_name=sheet.title, header_row=max(1, start - 1),
                 header_start_row=1 if start > 1 else None, header_end_row=start - 1 if start > 1 else None,

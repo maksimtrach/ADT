@@ -1,0 +1,136 @@
+"""Persist and probe administrator-managed LLM profiles."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+from threading import RLock
+from time import perf_counter
+
+import httpx
+from pydantic import BaseModel, Field
+
+from backend.app.core.config import settings
+from backend.app.core.llm_config import LLMConfiguration, LLMProfile, get_llm_configuration, read_llm_configuration
+from backend.app.services.llm import build_adapter
+
+
+class LLMProbeResult(BaseModel):
+    profile_name: str
+    server_available: bool
+    model_available: bool
+    available: bool
+    latency_ms: int
+    status_code: int | None = None
+    message: str
+    models: list[str] = Field(default_factory=list)
+
+
+_write_lock = RLock()
+
+
+def _quoted(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def dump_llm_configuration(configuration: LLMConfiguration) -> str:
+    """Render the supported TOML schema without adding a runtime dependency."""
+    invalid_names = [name for name in configuration.profiles if not re.fullmatch(r"[A-Za-z0-9_-]+", name)]
+    if invalid_names:
+        raise ValueError("Имена LLM-профилей могут содержать только латинские буквы, цифры, _ и -")
+    lines = [
+        "# Управляется через административную страницу настроек LLM.",
+        f"active_profile = {_quoted(configuration.active_profile)}",
+        "fallback_profiles = [" + ", ".join(_quoted(item) for item in configuration.fallback_profiles) + "]",
+        "",
+    ]
+    for name, profile in configuration.profiles.items():
+        lines.extend([
+            f"[profiles.{name}]",
+            f"enabled = {str(profile.enabled).lower()}",
+            f"protocol = {_quoted(profile.protocol)}",
+            f"base_url = {_quoted(profile.base_url)}",
+            f"model = {_quoted(profile.model)}",
+            f"timeout_seconds = {profile.timeout_seconds}",
+            f"connect_timeout_seconds = {profile.connect_timeout_seconds}",
+            f"thinking = {str(profile.thinking).lower()}",
+            f"no_think_suffix = {str(profile.no_think_suffix).lower()}",
+            f"structured_output = {str(profile.structured_output).lower()}",
+        ])
+        if profile.keep_alive is not None:
+            lines.append(f"keep_alive = {_quoted(profile.keep_alive)}")
+        if profile.api_key_env is not None:
+            lines.append(f"api_key_env = {_quoted(profile.api_key_env)}")
+        lines.extend([
+            "",
+            f"[profiles.{name}.generation]",
+            f"temperature = {profile.generation.temperature}",
+            f"max_tokens = {profile.generation.max_tokens}",
+        ])
+        if profile.generation.context_size is not None:
+            lines.append(f"context_size = {profile.generation.context_size}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def save_llm_configuration(configuration: LLMConfiguration) -> LLMConfiguration:
+    path = settings.llm_config_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    backup = path.with_name(path.name + ".bak")
+    with _write_lock:
+        try:
+            temporary.write_text(dump_llm_configuration(configuration), encoding="utf-8")
+            validated = read_llm_configuration(temporary)
+            if path.is_file():
+                shutil.copy2(path, backup)
+            os.replace(temporary, path)
+            get_llm_configuration.cache_clear()
+            return validated
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def probe_llm_profile(profile_name: str, profile: LLMProfile) -> LLMProbeResult:
+    adapter = build_adapter(profile_name, profile)
+    if not adapter.credentials_available():
+        return LLMProbeResult(
+            profile_name=profile_name, server_available=False, model_available=False, available=False,
+            latency_ms=0, message=f"Не задана переменная окружения {profile.api_key_env}",
+        )
+    endpoint = f"{profile.base_url}/api/tags" if profile.protocol == "ollama" else f"{profile.base_url}/models"
+    started = perf_counter()
+    try:
+        timeout = httpx.Timeout(min(profile.timeout_seconds, 30), connect=min(profile.connect_timeout_seconds, 10))
+        with httpx.Client(timeout=timeout, trust_env=False, headers=adapter.headers()) as client:
+            response = client.get(endpoint)
+            status_code = response.status_code
+            response.raise_for_status()
+            payload = response.json()
+        raw_models = payload.get("models", []) if profile.protocol == "ollama" else payload.get("data", [])
+        key = "name" if profile.protocol == "ollama" else "id"
+        models = sorted({str(item[key]) for item in raw_models if isinstance(item, dict) and item.get(key)})
+        model_available = profile.model in models
+        return LLMProbeResult(
+            profile_name=profile_name, server_available=True, model_available=model_available,
+            available=model_available, latency_ms=round((perf_counter() - started) * 1000),
+            status_code=status_code,
+            message="Модель доступна" if model_available else "Сервер доступен, но модель не найдена",
+            models=models[:200],
+        )
+    except httpx.TimeoutException:
+        message, status_code = "Превышено время ожидания подключения", None
+    except httpx.HTTPStatusError as error:
+        status_code = error.response.status_code
+        message = "Ошибка авторизации" if status_code in {401, 403} else f"HTTP {status_code}"
+    except (httpx.HTTPError, OSError, ValueError, TypeError, AttributeError, KeyError) as error:
+        status_code = None
+        message = f"Сервер недоступен: {type(error).__name__}"
+    return LLMProbeResult(
+        profile_name=profile_name, server_available=status_code is not None, model_available=False, available=False,
+        latency_ms=round((perf_counter() - started) * 1000), status_code=status_code, message=message,
+    )
+
+
+__all__ = ["LLMProbeResult", "dump_llm_configuration", "probe_llm_profile", "save_llm_configuration"]

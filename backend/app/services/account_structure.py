@@ -8,6 +8,18 @@ MONEY_KEYS = ("opening_debit", "opening_credit", "turnover_debit", "turnover_cre
 ACCOUNT_CODE = re.compile(r"^(?:\d{1,4}|[A-ZА-ЯЁ][A-ZА-ЯЁ0-9]{0,11})(?:\.[0-9A-Za-zА-Яа-яЁё]+)*$")
 CURRENCIES = {"USD", "EUR", "CNY", "JPY", "KRW", "RUB", "GBP", "CHF", "HKD", "TRY", "KZT", "BYN", "AED", "CAD", "AUD", "INR"}
 DERIVED_ACCOUNT_FIELDS = {"parent_account", "account_level", "row_type", "source_code", "source_name", "currency", "amount_basis", "parent_source_row", "classification_note", "counterparty", "parent_analytic_row"}
+SERVICE_COLUMNS = (
+    TargetColumn(key="parent_account", label="Родительский счёт"),
+    TargetColumn(key="account_level", label="Уровень счёта"),
+    TargetColumn(key="row_type", label="Тип строки"),
+    TargetColumn(key="parent_source_row", label="Строка родительского счёта"),
+)
+
+
+def result_columns(columns: list[TargetColumn]) -> list[TargetColumn]:
+    """Append portable service metadata without changing the transformation target schema."""
+    existing = {column.key for column in columns}
+    return [*columns, *(column for column in SERVICE_COLUMNS if column.key not in existing)]
 
 
 def currency_code(value):
@@ -118,3 +130,4 @@ def annotate_account_rows(rows):
             parent = by_row[row["parent_source_row"]]
             row["account"] = parent["account"]
             row["parent_account"] = parent["account"]
+            row["account_level"] = parent["account_level"]

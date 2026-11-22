@@ -7,13 +7,14 @@ const tones: Record<string, string> = {
   QUEUED: "bg-slate-100 text-slate-700",
   WARNINGS: "bg-amber-50 text-amber-800",
   FAILED: "bg-red-50 text-red-700",
+  CANCELLED: "bg-amber-50 text-amber-800",
   NOT_PERFORMED: "bg-slate-100 text-slate-600",
   SUCCESS: "bg-emerald-50 text-emerald-700",
   FAILURE: "bg-red-50 text-red-700",
 };
 
 const labels: Record<string, string> = {
-  COMPLETED: "Завершено", RUNNING: "Выполняется", QUEUED: "В очереди", FAILED: "Ошибка",
+  COMPLETED: "Завершено", RUNNING: "Выполняется", QUEUED: "В очереди", FAILED: "Ошибка", CANCELLED: "Прервано",
   PASSED: "Пройден", WARNINGS: "С замечаниями", NOT_PERFORMED: "Не выполнялся",
   SUCCESS: "Успешно", FAILURE: "Ошибка",
 };

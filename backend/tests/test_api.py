@@ -16,6 +16,8 @@ from backend.app.core.errors import AppError
 from backend.app.db.database import connection, initialize_database, utc_now
 from backend.app.main import app
 from backend.app.services.planner import OllamaPlanner
+from backend.app.services.pipeline import process_transformation
+from backend.app.services.processing_log import create_processing_run
 from scripts.generate_test_files import OUTPUT, generate_all
 from backend.tests.test_hypothesis_planner import ambiguous_workbook
 from backend.tests.test_structure_recovery import recovery_workbook, fake_planner, answer_layout
@@ -32,7 +34,7 @@ def test_api_uses_llm_recovery_only_after_structural_failure(tmp_path, monkeypat
             if failure_mode == "technical":
                 raise RuntimeError("Техническая ошибка чтения")
             raise AppError(422, "Шапка не распознана", "STRUCTURE_NOT_RECOGNIZED")
-        monkeypatch.setattr("backend.app.services.pipeline.choose_plan", no_structure)
+        monkeypatch.setattr("backend.app.services.hypothesis_planner.choose_plan", no_structure)
     initialize_database()
     add_user("test@example.test", "TestPassword123!", "USER")
     path = tmp_path / "recovery.xlsx"
@@ -103,6 +105,62 @@ def add_user(email: str, password: str, role: str) -> None:
         )
 
 
+def test_cancel_active_transformation_is_persisted_and_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "database_path", tmp_path / "test.sqlite3")
+    monkeypatch.setattr(settings, "storage_path", tmp_path / "storage")
+    initialize_database()
+    add_user("test.test", "TestPassword123!", "USER")
+    transformation_id = str(uuid4())
+    directory = tmp_path / "storage" / transformation_id
+    directory.mkdir(parents=True)
+    source_path = directory / "source.xlsx"
+    source_path.write_bytes(b"unused")
+    now = utc_now()
+    with connection() as db:
+        user_id = db.execute("SELECT id FROM users WHERE email = ?", ("test.test",)).fetchone()["id"]
+        db.execute(
+            """
+            INSERT INTO transformations
+              (id, user_id, source_filename, source_path, data_type, template_id,
+               status, current_stage, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (transformation_id, user_id, "source.xlsx", str(source_path), "TRIAL_BALANCE",
+             "trial_balance_flat_v1", "RUNNING", "PLANNING", now, now),
+        )
+    run_id = create_processing_run(transformation_id, 1)
+    with connection() as db:
+        db.execute("UPDATE transformation_runs SET status = ? WHERE id = ?", ("RUNNING", run_id))
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"email": "test.test", "password": "TestPassword123!"})
+        cancelled = client.post(f"/api/transformations/{transformation_id}/cancel")
+        assert cancelled.status_code == 200
+        assert cancelled.json()["data"]["status"] == "CANCELLED"
+        assert cancelled.json()["data"]["current_stage"] == "CANCELLED"
+        again = client.post(f"/api/transformations/{transformation_id}/cancel")
+        assert again.status_code == 200
+        memo = client.get(f"/api/transformations/{transformation_id}/memo").json()["data"]
+        assert memo["run"]["status"] == "CANCELLED"
+        assert [event["event_type"] for event in memo["events"]] == ["PROCESSING_CANCELLED"]
+
+    process_transformation(transformation_id, run_id=run_id)
+    with connection() as db:
+        transformation = db.execute("SELECT * FROM transformations WHERE id = ?", (transformation_id,)).fetchone()
+        run = db.execute("SELECT * FROM transformation_runs WHERE id = ?", (run_id,)).fetchone()
+        audit_count = db.execute(
+            "SELECT COUNT(*) FROM audit_logs WHERE entity_id = ? AND action = ?",
+            (transformation_id, "TRANSFORMATION_CANCELLED"),
+        ).fetchone()[0]
+        version_count = db.execute(
+            "SELECT COUNT(*) FROM transformation_versions WHERE transformation_id = ?", (transformation_id,),
+        ).fetchone()[0]
+    assert transformation["status"] == "CANCELLED"
+    assert run["status"] == "CANCELLED"
+    assert audit_count == 1
+    assert version_count == 0
+
+
 def test_unresolved_structure_is_not_exported_and_can_be_clarified(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "database_path", tmp_path / "test.sqlite3")
     monkeypatch.setattr(settings, "storage_path", tmp_path / "storage")
@@ -163,7 +221,15 @@ def test_auth_transform_and_admin_audit(tmp_path, monkeypatch):
         assert detail.json()["data"]["llm_used"] is False
         preview = user_client.get(f"/api/transformations/{transformation_id}/preview")
         assert preview.status_code == 200
-        assert preview.json()["data"]["rows"][0]["amount"] == 12500.5
+        preview_data = preview.json()["data"]
+        assert preview_data["rows"][0]["amount"] == 12500.5
+        assert [column["key"] for column in preview_data["columns"]][-4:] == [
+            "parent_account", "account_level", "row_type", "parent_source_row",
+        ]
+        assert preview_data["rows"][0]["parent_account"] is None
+        assert preview_data["rows"][0]["account_level"] is None
+        assert preview_data["rows"][0]["row_type"] is None
+        assert preview_data["rows"][0]["parent_source_row"] is None
         memo = user_client.get(f"/api/transformations/{transformation_id}/memo")
         assert memo.status_code == 200
         memo_data = memo.json()["data"]
@@ -173,6 +239,7 @@ def test_auth_transform_and_admin_audit(tmp_path, monkeypatch):
             "FILE_OPENED",
             "PROFILE_CREATED",
             "SOURCE_SAMPLE",
+            "DOCUMENT_PROFILE_SELECTED",
             "HYPOTHESES_EVALUATED",
             "BASELINE_SPEC_CREATED",
             "BASELINE_CHECKED",

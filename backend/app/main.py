@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 
 from backend.app.api.audit_log import router as audit_log_router
 from backend.app.api.auth import router as auth_router
+from backend.app.api.document_memory import router as document_memory_router
+from backend.app.api.llm_settings import router as llm_settings_router
 from backend.app.api.transformations import router as transformations_router
 from backend.app.core.config import settings
 from backend.app.core.errors import AppError
@@ -27,7 +29,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in settings.web_origin.split(",")],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -54,3 +56,5 @@ def health():
 app.include_router(auth_router, prefix="/api")
 app.include_router(transformations_router, prefix="/api")
 app.include_router(audit_log_router, prefix="/api")
+app.include_router(document_memory_router, prefix="/api")
+app.include_router(llm_settings_router, prefix="/api")

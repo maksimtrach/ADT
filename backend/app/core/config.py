@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     web_origin: str = "http://localhost:5174"
     session_ttl_hours: int = 12
     max_upload_mb: int = 25
+    document_memory_path: Path = Path("./document-memory")
+    document_memory_enabled: bool = True
 
     demo_user_email: str = "user@transformer.local"
     demo_user_password: str = "ChangeMe123!"
@@ -28,7 +30,7 @@ class Settings(BaseSettings):
     llm_config_path: Path = Path("./config/llm.toml")
     llm_profile: str | None = None
 
-    @field_validator("database_path", "storage_path", "llm_config_path", mode="before")
+    @field_validator("database_path", "storage_path", "llm_config_path", "document_memory_path", mode="before")
     @classmethod
     def resolve_path(cls, value: str | Path) -> Path:
         return Path(value).expanduser().resolve()

@@ -2,7 +2,7 @@
   {
     "account": "76",
     "subaccount": "76.05",
-    "analytics": "Контрагент Один",
+    "account_name": "Расчеты с разными дебиторами",
     "opening_debit": 100.0,
     "opening_credit": null,
     "turnover_debit": 400.0,
@@ -13,7 +13,7 @@
   {
     "account": "76",
     "subaccount": "76.05",
-    "analytics": "Контрагент Два",
+    "account_name": "Расчеты с разными дебиторами",
     "opening_debit": 200.0,
     "opening_credit": null,
     "turnover_debit": 300.0,

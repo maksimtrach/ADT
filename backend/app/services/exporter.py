@@ -4,9 +4,24 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from backend.app.models.domain import TransformationSpec
+from backend.app.services.account_structure import SERVICE_COLUMNS, result_columns
+
+
+ACCOUNT_IDENTIFIER_KEYS = {
+    "account", "subaccount", "debit_account", "credit_account", "parent_account",
+    "parent_source_row", "account_level", "source_code",
+}
+
+
+def _export_value(key: str, value: Any) -> Any:
+    if key not in ACCOUNT_IDENTIFIER_KEYS or value is None:
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def export_result(
@@ -19,22 +34,41 @@ def export_result(
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Результат"
-    headers = [column.label for column in spec.target_columns] + ["Источник"]
+    output_columns = result_columns(spec.target_columns)
+    headers = [column.label for column in output_columns] + ["Источник"]
     worksheet.append(headers)
     for cell in worksheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1677FF")
         cell.alignment = Alignment(vertical="center")
+    service_start = next(
+        (index for index, column in enumerate(output_columns, start=1) if column.key == SERVICE_COLUMNS[0].key),
+        None,
+    )
+    if service_start:
+        separator = Side(style="medium", color="94A3B8")
+        worksheet.cell(1, service_start).border = Border(left=separator)
+        for index in range(service_start, service_start + len(SERVICE_COLUMNS)):
+            worksheet.cell(1, index).fill = PatternFill("solid", fgColor="475569")
     for row in rows:
         source_refs = sorted(set(row.get("_source_refs", {}).values()))
-        worksheet.append([row.get(column.key) for column in spec.target_columns] + [", ".join(source_refs)])
+        worksheet.append([_export_value(column.key, row.get(column.key)) for column in output_columns]
+                         + [", ".join(source_refs)])
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions
-    for index, column in enumerate(spec.target_columns, start=1):
-        worksheet.column_dimensions[worksheet.cell(1, index).column_letter].width = 22 if column.kind == "text" else 18
+    for index, column in enumerate(output_columns, start=1):
+        width = 26 if column.key == "parent_source_row" else 22 if column.kind == "text" else 18
+        worksheet.column_dimensions[worksheet.cell(1, index).column_letter].width = width
         if column.kind == "number":
             for row_number in range(2, worksheet.max_row + 1):
                 worksheet.cell(row_number, index).number_format = '#,##0.00'
+        elif column.key in ACCOUNT_IDENTIFIER_KEYS:
+            for row_number in range(2, worksheet.max_row + 1):
+                worksheet.cell(row_number, index).number_format = "@"
+        if service_start and index == service_start:
+            separator = Side(style="medium", color="94A3B8")
+            for row_number in range(2, worksheet.max_row + 1):
+                worksheet.cell(row_number, index).border = Border(left=separator)
     worksheet.column_dimensions[worksheet.cell(1, len(headers)).column_letter].width = 32
 
     controls = workbook.create_sheet("Контроль")

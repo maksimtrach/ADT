@@ -87,9 +87,13 @@ def _annotate_account_tree(rows: list[dict[str, Any]]) -> None:
     for row in rows:
         code = row.get("account") or ""
         matches = [prefix for prefix in prefixes if prefix.isdigit() and code.isdigit() and int(prefix) == int(code)]
-        if "." not in code and len(matches) == 1:
+        if "." not in code and len(matches) == 1 and len(matches[0]) > len(code):
             row["account"] = matches[0]
-    codes = {row.get("account") for row in rows if row.get("account")}
+    by_code: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if code := row.get("account"):
+            by_code.setdefault(code, []).append(row)
+    codes = set(by_code)
     for row in rows:
         code = row.get("account") or ""
         parts = code.split(".")
@@ -97,9 +101,24 @@ def _annotate_account_tree(rows: list[dict[str, Any]]) -> None:
         parent = next((item for item in reversed(ancestors) if item in codes), None)
         has_children = any(other.startswith(code + ".") for other in codes) if code else False
         row["parent_account"] = parent
+        row["parent_source_row"] = (
+            str(by_code[parent][0]["_source_row"])
+            if parent and len(by_code[parent]) == 1
+            else None
+        )
         row["account_level"] = str(len(parts)) if code else None
-        row["row_type"] = "Сводный счёт" if has_children else "Детальный счёт"
+        row["row_type"] = ("Сводный счёт" if has_children else "Детальный счёт") if code else None
         row["_control_included"] = parent is None
+
+
+def _ensure_service_fields(rows: list[dict[str, Any]]) -> None:
+    """Keep the result shape stable even when the source has no account hierarchy."""
+    for row in rows:
+        has_account = row.get("account") not in (None, "")
+        row.setdefault("parent_account", None)
+        row.setdefault("account_level", "1" if has_account else None)
+        row.setdefault("row_type", "Детальный счёт" if has_account else None)
+        row.setdefault("parent_source_row", None)
 
 
 ACCOUNT_PATTERN = re.compile(r"^\d{1,3}(?:\.\d+)*$")
@@ -265,7 +284,7 @@ def parse_workbook(path: Path, spec: TransformationSpec, data_type: DataType, *,
             explicit_account = extracted.get("account")
             if explicit_account not in (None, "") and contexts.get("account", (None, ""))[0] != explicit_account:
                 contexts.pop("subaccount", None)
-                contexts.pop("analytics", None)
+                contexts.pop("account_name", None)
 
             for key in spec.row_rules.inherit_fields:
                 if extracted.get(key) in (None, "") and key in contexts:
@@ -311,6 +330,7 @@ def parse_workbook(path: Path, spec: TransformationSpec, data_type: DataType, *,
             annotate_account_rows(result.rows)
         else:
             _annotate_account_tree(result.rows)
+    _ensure_service_fields(result.rows)
     if owns_workbook:
         workbook.close()
     return result

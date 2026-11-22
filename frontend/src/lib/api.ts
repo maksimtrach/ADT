@@ -23,7 +23,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> { ret
 export async function apiWithMeta<T>(path: string, init?: RequestInit) { return requestEnvelope<T>(path, init); }
 
 export async function downloadResult(id: string, fallbackName: string) {
-  const response = await fetch(`${API_URL}/transformations/${id}/download`, { credentials: "include" });
+  return downloadFile(`/transformations/${id}/download`, fallbackName);
+}
+
+export async function downloadFile(path: string, fallbackName: string) {
+  const response = await fetch(`${API_URL}${path}`, { credentials: "include" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: { message: "Не удалось скачать файл" } })) as { error?: { message?: string } };
     throw new ApiError(response.status, body.error?.message ?? "Не удалось скачать файл");
@@ -41,4 +45,3 @@ export async function downloadResult(id: string, fallbackName: string) {
   link.remove();
   URL.revokeObjectURL(url);
 }
-

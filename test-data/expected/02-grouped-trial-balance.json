@@ -1,8 +1,8 @@
 [
   {
-    "account": "62",
-    "subaccount": "62.01",
-    "analytics": "Покупатель Север",
+    "account": "62.01",
+    "subaccount": null,
+    "account_name": "Расчеты с покупателями",
     "opening_debit": 2000.0,
     "opening_credit": null,
     "turnover_debit": 3000.0,
@@ -11,9 +11,9 @@
     "closing_credit": null
   },
   {
-    "account": "62",
-    "subaccount": "62.01",
-    "analytics": "Покупатель Юг",
+    "account": "62.02",
+    "subaccount": null,
+    "account_name": "Расчеты по авансам",
     "opening_debit": 500.0,
     "opening_credit": null,
     "turnover_debit": 700.0,

@@ -21,6 +21,7 @@ model = "local-model"
 protocol = "openai"
 base_url = "http://192.168.1.65:1234/v1/"
 model = "remote-model"
+connect_timeout_seconds = 7
 api_key_env = "REMOTE_LLM_API_KEY"
 """,
         encoding="utf-8",
@@ -32,6 +33,7 @@ api_key_env = "REMOTE_LLM_API_KEY"
     assert configuration.profile_order() == ["local", "remote"]
     assert configuration.profiles["local"].base_url == "http://127.0.0.1:11434"
     assert configuration.profiles["remote"].api_key_env == "REMOTE_LLM_API_KEY"
+    assert configuration.profiles["remote"].connect_timeout_seconds == 7
 
     monkeypatch.setattr(settings, "llm_profile", "remote")
     assert configuration.profile_order() == ["remote"]

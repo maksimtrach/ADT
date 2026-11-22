@@ -86,7 +86,7 @@ class LLMAdapter(ABC):
         started_at = perf_counter()
         try:
             with httpx.Client(
-                timeout=self.profile.timeout_seconds,
+                timeout=httpx.Timeout(self.profile.timeout_seconds, connect=self.profile.connect_timeout_seconds),
                 trust_env=False,
                 headers=self.headers(),
             ) as client:

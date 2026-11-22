@@ -18,7 +18,7 @@ from backend.app.models.domain import (
     TransformationSpec,
 )
 from backend.app.services.templates import get_template
-from backend.app.services.account_structure import MONEY_KEYS, DERIVED_ACCOUNT_FIELDS, account_columns
+from backend.app.services.account_structure import MONEY_KEYS, DERIVED_ACCOUNT_FIELDS
 
 
 def standard_money_mapping(values):
@@ -41,7 +41,7 @@ def standard_money_mapping(values):
 ALIASES: dict[str, list[str]] = {
     "account": ["счет", "счёт", "счет учета", "номер счета", "account"],
     "subaccount": ["субсчет", "субсчёт", "суб счет"],
-    "analytics": ["аналитика", "контрагент", "субконто", "наименование"],
+    "account_name": ["наименование счета", "наименование счёта", "название счета", "название счёта", "наименование"],
     "opening_debit": ["сальдо на начало дт", "сальдо на начало дебет", "начальное сальдо дебет", "нач. сальдо дт"],
     "opening_credit": ["сальдо на начало кт", "сальдо на начало кредит", "начальное сальдо кредит", "нач. сальдо кт"],
     "turnover_debit": ["оборот дт", "обороты дт", "обороты дебет", "дебетовый оборот"],
@@ -138,6 +138,43 @@ def _merged_values(worksheet) -> dict[tuple[int, int], Any]:
             for column_number in range(merged.min_col, merged.max_col + 1):
                 values[(row_number, column_number)] = value
     return values
+
+
+def _account_cell_text(cell) -> str:
+    value = cell.value
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and float(value).is_integer():
+        number_format = str(cell.number_format or "")
+        if re.fullmatch(r"0+", number_format):
+            return str(int(value)).zfill(len(number_format))
+    return str(value or "").strip()
+
+
+def _column_has_data(worksheet, column: int, start_row: int, end_row: int) -> bool:
+    return any(worksheet.cell(row, column).value not in (None, "") for row in range(start_row, end_row + 1))
+
+
+def _code_tree_evidence(worksheet, account_column: int | None, start_row: int, end_row: int) -> bool:
+    """Recognize a code-only account tree without treating a plain code list as a hierarchy."""
+    if account_column is None:
+        return False
+    records: list[tuple[str, int]] = []
+    for row_number in range(start_row, end_row + 1):
+        cell = worksheet.cell(row_number, account_column)
+        code = _account_cell_text(cell)
+        if not ACCOUNT_PATTERN.fullmatch(code):
+            continue
+        visual_depth = max(int(cell.alignment.indent or 0), int(worksheet.row_dimensions[row_number].outlineLevel or 0))
+        records.append((code, visual_depth))
+    codes = {code for code, _ in records}
+    parent_links = sum(
+        any(".".join(code.split(".")[:level]) in codes for level in range(1, len(code.split("."))))
+        for code, _ in records
+        if "." in code
+    )
+    visual_children = sum(depth > 0 and "." in code for code, depth in records)
+    # Formatting is strong evidence. Several explicit parent/child code pairs are
+    # also sufficient because some exports discard outline/indent metadata.
+    return len(codes) >= 3 and parent_links >= 1 and (visual_children >= 1 or parent_links >= 3)
 
 
 def _unmerged_period_headers(worksheet, start_row, end_row, max_column, merged_values):
@@ -251,13 +288,13 @@ def _target_columns(
     text_columns = [account]
     used = {"account"}
     for column in template_columns:
-        if column.kind == "number" or column.key in {"account", "subaccount", "analytics"}:
+        if column.kind == "number" or column.key in {"account", "subaccount", "account_name"}:
             continue
         text_columns.append(column)
         used.add(column.key)
     for column in template_columns:
         if (
-            column.key in {"subaccount", "analytics"}
+            column.key in {"subaccount", "account_name"}
             and mapping.get(column.key) is not None
             and mapping[column.key] != source_column
         ):
@@ -338,11 +375,13 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
                         mapping,
                         actual_end,
                         labels_by_column,
+                        _code_tree_evidence(worksheet, mapping.get("account"), end_row + 1, actual_end),
                     ))
                 standard = standard_money_mapping(values) if data_type == DataType.TRIAL_BALANCE else None
                 if standard and mapping.get("account") and not any(mapping.get(key) for key in MONEY_KEYS):
                     candidates.append((aggregate + 6, worksheet.title, start_row, end_row,
-                                       {**mapping, **standard}, actual_end, labels_by_column))
+                                       {**mapping, **standard}, actual_end, labels_by_column,
+                                       _code_tree_evidence(worksheet, mapping.get("account"), end_row + 1, actual_end)))
                 # Retain near-equal column assignments instead of settling ties
                 # by physical column order. Data checks decide between them.
                 for target in template.columns:
@@ -355,16 +394,21 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
                             continue
                         score = _column_score(target.key, value, ALIASES.get(target.key, [target.label]), data_type == DataType.TRIAL_BALANCE)
                         if score >= max(0.55, current_score - 0.12):
+                            if (target.kind == "number"
+                                    and _column_has_data(worksheet, current, end_row + 1, actual_end)
+                                    and not _column_has_data(worksheet, index, end_row + 1, actual_end)):
+                                continue
                             alternative = {**mapping, target.key: index}
                             candidates.append((aggregate + score - current_score, worksheet.title,
-                                               start_row, end_row, alternative, actual_end, labels_by_column))
+                                               start_row, end_row, alternative, actual_end, labels_by_column,
+                                               _code_tree_evidence(worksheet, alternative.get("account"), end_row + 1, actual_end)))
     workbook.close()
     if not candidates or max(item[0] for item in candidates) < 1:
         raise AppError(422, "Не удалось определить строку заголовков", "STRUCTURE_NOT_RECOGNIZED")
     selected = []
     signatures = set()
     for candidate in sorted(candidates, key=lambda item: item[0], reverse=True):
-        _, sheet, start, end, mapping, _, _ = candidate
+        _, sheet, start, end, mapping, _, _, _ = candidate
         signature = (sheet, end, tuple(mapping.items()))
         if signature in signatures:
             continue
@@ -377,7 +421,7 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
 
 def _build_spec(candidate, data_type: DataType, template_id: str) -> TransformationSpec:
     template = get_template(template_id)
-    _, sheet_name, header_start_row, header_end_row, mapping, data_end_row, labels_by_column = candidate
+    _, sheet_name, header_start_row, header_end_row, mapping, data_end_row, labels_by_column, code_tree = candidate
     hierarchy = None
     account_name_column = None
     if data_type == DataType.TRIAL_BALANCE and mapping.get("account"):
@@ -395,15 +439,15 @@ def _build_spec(candidate, data_type: DataType, template_id: str) -> Transformat
         if len(levels) > 1:
             hierarchy = HierarchyRule(source_column=source_column, levels=levels)
     target_columns, mapping = _target_columns(template.columns, mapping, hierarchy)
-    account_tree = account_name_column is not None
+    account_tree = account_name_column is not None or (code_tree and hierarchy is None)
     if account_tree:
-        target_columns = account_columns(template.columns)
+        target_columns = list(template.columns)
         mapping = {column.key: mapping.get(column.key) for column in target_columns}
         mapping["account_name"] = account_name_column
     matched = sum(value is not None for value in mapping.values())
     confidence = min(0.98, matched / max(len(target_columns), 1) + 0.18)
     inherit = [] if account_tree else [level.key for level in hierarchy.levels] if hierarchy else (
-        ["account", "subaccount", "analytics"] if data_type == DataType.TRIAL_BALANCE else []
+        ["account", "subaccount", "account_name"] if data_type == DataType.TRIAL_BALANCE else []
     )
     notes = [
         f"Шапка определена в строках {header_start_row}–{header_end_row}",
@@ -411,13 +455,18 @@ def _build_spec(candidate, data_type: DataType, template_id: str) -> Transformat
     ]
     if hierarchy:
         notes.append("Иерархия аналитик: " + " → ".join(level.label for level in hierarchy.levels))
+    if account_tree and account_name_column is None:
+        notes.append("Иерархия счетов определена по кодам, отступам и уровням строк; наименование счёта в источнике отсутствует")
     derived = DERIVED_ACCOUNT_FIELDS if account_tree else set()
     standard = standard_money_mapping([normalize_header(" ".join(labels)) for labels in labels_by_column])
     assumed_order = bool(standard and all(mapping.get(key) == value for key, value in standard.items()))
     if assumed_order:
         notes.append("Применён стандартный порядок ОСВ: Дт/Кт начала, Дт/Кт оборотов, Дт/Кт конца; подписи сторон отсутствуют, арифметика не доказывает их порядок")
     if account_tree:
-        confidence = min(0.98, matched / max(len(target_columns) - len(derived), 1))
+        confidence_keys = {"account", *MONEY_KEYS}
+        if account_name_column is not None:
+            confidence_keys.add("account_name")
+        confidence = min(0.98, sum(mapping.get(key) is not None for key in confidence_keys) / len(confidence_keys))
         notes.append("Счета и субсчета сохранены; контрольные суммы рассчитываются по верхнему уровню без повторного сложения дочерних счетов")
     missing = [column.label for column in target_columns if mapping[column.key] is None and column.key not in inherit and column.key not in derived]
     if missing:
@@ -432,7 +481,7 @@ def _build_spec(candidate, data_type: DataType, template_id: str) -> Transformat
         column_mapping=mapping,
         target_columns=target_columns,
         row_rules=RowRules(inherit_fields=inherit, account_tree=account_tree,
-                           classify_account_rows=account_tree, standard_money_order=assumed_order),
+                           classify_account_rows=account_name_column is not None, standard_money_order=assumed_order),
         hierarchy=hierarchy,
         confidence=confidence,
         notes=notes,
