@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from backend.app.models.domain import DataType, TransformationSpec
 from backend.app.services.account_structure import annotate_account_rows
 from backend.app.services.table_regions import is_blank, trailing_control
+from backend.app.services.sheet_cache import SheetReadCache
 
 
 @dataclass
@@ -151,18 +152,16 @@ def _hierarchy_level_index(
     return current_depth + 1
 
 
-def parse_workbook(path: Path, spec: TransformationSpec, data_type: DataType, *, workbook=None) -> ParseResult:
+def parse_workbook(path: Path, spec: TransformationSpec, data_type: DataType, *, workbook=None, sheet_cache=None) -> ParseResult:
     owns_workbook = workbook is None
     if owns_workbook:
         workbook = load_workbook(path, data_only=True, read_only=False, keep_links=False)
     worksheet = workbook[spec.sheet_name]
     result = ParseResult()
-    merged_values: dict[tuple[int, int], tuple[Any, str]] = {}
-    for merged in worksheet.merged_cells.ranges:
-        top_left = worksheet.cell(merged.min_row, merged.min_col)
-        for row_number in range(merged.min_row, merged.max_row + 1):
-            for column_number in range(merged.min_col, merged.max_col + 1):
-                merged_values[(row_number, column_number)] = (top_left.value, top_left.coordinate)
+    sheet_cache = sheet_cache or SheetReadCache(worksheet)
+    if sheet_cache.worksheet is not worksheet:
+        raise ValueError("Кеш листа относится к другому исходному листу")
+    merged_values = sheet_cache.merged_values
 
     contexts: dict[str, tuple[Any, str]] = {}
     target_kinds = {column.key: column.kind for column in spec.target_columns}
@@ -172,14 +171,13 @@ def parse_workbook(path: Path, spec: TransformationSpec, data_type: DataType, *,
     hierarchy_keys = {level.key for level in hierarchy_levels}
     hierarchy_depth = -1
 
-    detected_control = trailing_control(worksheet, spec.column_mapping, spec.data_start_row, spec.data_end_row) if spec.row_rules.account_tree else None
+    detected_control = trailing_control(worksheet, spec.column_mapping, spec.data_start_row, spec.data_end_row) if spec.row_rules.account_tree and not spec.explicit_bounds else None
     control_rows = set(spec.control_rows) | ({detected_control} if detected_control else set())
     for row_number in sorted(set(range(spec.data_start_row, spec.data_end_row + 1)) | control_rows):
-        raw_values = [worksheet.cell(row_number, column).value for column in range(1, worksheet.max_column + 1)]
-        if all(is_blank(value) for value in raw_values):
+        raw_values, row_blank, row_text = sheet_cache.row(row_number)
+        if row_blank:
             result.skipped_rows.append(row_number)
             continue
-        row_text = " ".join(str(value).strip().lower() for value in raw_values[:12] if value not in (None, ""))
         is_total = any(keyword.lower() in row_text for keyword in spec.row_rules.skip_keywords)
 
         extracted: dict[str, Any] = {}
@@ -215,6 +213,21 @@ def parse_workbook(path: Path, spec: TransformationSpec, data_type: DataType, *,
                 )
             if extracted[target.key] not in (None, "") and coordinate:
                 refs[target.key] = f"{worksheet.title}!{coordinate}"
+
+        # The flat target has one account field. For legacy sources where the
+        # detailed code is stored in a separate subaccount column, prefer that
+        # code and fall back to the main account when the detail cell is empty.
+        detail_column = spec.column_mapping.get("_account_detail") or spec.column_mapping.get("subaccount")
+        if data_type == DataType.TRIAL_BALANCE and detail_column:
+            detail_cell = worksheet.cell(row_number, detail_column)
+            detail_value = detail_cell.value
+            detail_coordinate = detail_cell.coordinate
+            if detail_value in (None, "") and (row_number, detail_column) in merged_values:
+                detail_value, detail_coordinate = merged_values[(row_number, detail_column)]
+            detail_account = _account_string(detail_value, worksheet[detail_coordinate])
+            if detail_account:
+                extracted["account"] = detail_account
+                refs["account"] = f"{worksheet.title}!{detail_coordinate}"
 
         if (spec.row_rules.account_tree and row_number == spec.data_end_row
                 and numeric_count == 0 and not extracted.get("account_name")):

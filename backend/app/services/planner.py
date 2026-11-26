@@ -13,7 +13,9 @@ from backend.app.models.domain import DataType, TransformationSpec, ValueOverrid
 from backend.app.services.llm import LLMAdapter, build_adapter
 from backend.app.services.rule_planner import rule_plan
 from backend.app.services.account_structure import DERIVED_ACCOUNT_FIELDS
-from backend.app.services.llm_context import context_rows, source_context, llm_candidate_summary
+from backend.app.services.llm_context import context_rows, source_context
+from backend.app.services.candidate_choice import candidate_request
+from backend.app.services.llm.budget import LLMTimeBudget, LLMRequestError, transport_error
 
 
 class FeedbackPatch(BaseModel):
@@ -26,7 +28,7 @@ class FeedbackPatch(BaseModel):
 
 class CandidateChoice(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    candidate_id: int | None = None
+    candidate_id: int | None = Field(..., strict=True)
     reason: str = Field(max_length=500)
 
 
@@ -71,6 +73,10 @@ class LLMPlanner:
             if self.configuration.profiles[name].enabled
         ]
 
+        self.budget = LLMTimeBudget(self.configuration.total_timeout_seconds)
+        for adapter in self.adapters:
+            adapter.budget = self.budget
+
     @property
     def enabled(self) -> bool:
         return bool(self.adapters)
@@ -112,15 +118,13 @@ class LLMPlanner:
     def choose_candidate(self, selection, trace: TraceCallback | None = None, source_path=None):
         # The model can choose a verified interpretation or abstain. It cannot
         # rewrite column positions, rows, constraints or values.
-        choices = [llm_candidate_summary(item, str(i)) for i, item in enumerate(selection.candidates) if item.eligible]
-        if not choices:
+        request = candidate_request(selection, source_path)
+        if request is None:
             raise AppError(422, "Ни один вариант не прошёл проверки данных", "STRUCTURE_AMBIGUOUS")
-        request = {
-            "task": "Выбери интерпретацию таблицы по заголовкам и фактическим значениям. "
-                    "Не предпочитай МСФО или РСБУ без свидетельств о назначении таблицы. "
-                    "Если обе интерпретации правдоподобны, верни candidate_id=null.",
-            "candidates": choices,
-            "profile": source_context(source_path, [c.spec for c in selection.candidates if c.eligible]) if source_path else None,
+        allowed = {item["candidate_id"] for item in request["candidates"]}
+        schema = CandidateChoice.model_json_schema()
+        schema["properties"]["candidate_id"] = {
+            "anyOf": [{"type": "integer", "enum": sorted(allowed)}, {"type": "null"}],
         }
         for index, adapter in enumerate(self.adapters):
             content = json.dumps(request, ensure_ascii=False)
@@ -130,20 +134,21 @@ class LLMPlanner:
                 result = adapter.complete(
                     [{"role": "system", "content": "Выбирай только из предоставленных вариантов. Верни JSON."},
                      {"role": "user", "content": content}],
-                    CandidateChoice.model_json_schema(), "CandidateChoice", trace,
+                    schema, "CandidateChoice", trace,
                 )
-            except (httpx.HTTPError, OSError, RuntimeError) as error:
-                if index + 1 < len(self.adapters):
+            except (httpx.HTTPError, OSError, RuntimeError, LLMRequestError) as error:
+                if index + 1 < len(self.adapters) and self.budget.remaining > 0:
                     if trace:
                         trace("LLM_PROFILE_FALLBACK", {"from_profile": adapter.profile_name,
                               "to_profile": self.adapters[index + 1].profile_name, "reason": str(error)[:300]})
                     continue
-                raise AppError(503, "Модели недоступны для уточнения структуры", "LLM_UNAVAILABLE") from error
+                if isinstance(error, AppError):
+                    raise
+                raise transport_error(adapter, error) from error
             try:
                 choice = CandidateChoice.model_validate_json(result.content)
             except ValueError as error:
                 raise AppError(422, "Модель не вернула допустимый выбор", "INVALID_LLM_SPEC") from error
-            allowed = {int(item["candidate_id"]) for item in choices}
             if choice.candidate_id not in allowed:
                 raise AppError(422, "Не удалось однозначно выбрать структуру; укажите исходную колонку счёта", "STRUCTURE_AMBIGUOUS")
             if trace:
@@ -231,10 +236,14 @@ class LLMPlanner:
                             "message": str(error)[:1000],
                         },
                     )
-                failures.append((adapter, error))
+                failures.append((adapter, AppError(
+                    422, f"Модель «{adapter.profile.model}» вернула некорректный ответ: {type(error).__name__}",
+                    "INVALID_LLM_RESPONSE")))
             except Exception as error:
                 failures.append((adapter, error))
 
+            if self.budget.remaining <= 0:
+                break
             if index + 1 < len(self.adapters) and trace:
                 next_adapter = self.adapters[index + 1]
                 trace(
@@ -314,7 +323,7 @@ class LLMPlanner:
         if candidate.target_columns != baseline.target_columns:
             raise AppError(422, "LLM изменила целевую схему", "INVALID_LLM_SPEC")
         if candidate.control_rows != baseline.control_rows:
-            raise AppError(422, "LLM изменила контрольные строки", "INVALID_LLM_SPEC")
+            raise AppError(422, "LLM изменила итоговые строки", "INVALID_LLM_SPEC")
         if candidate.row_rules.account_tree != baseline.row_rules.account_tree:
             raise AppError(422, "LLM изменила правила суммирования счетов", "INVALID_LLM_SPEC")
         if candidate.row_rules.classify_account_rows != baseline.row_rules.classify_account_rows:

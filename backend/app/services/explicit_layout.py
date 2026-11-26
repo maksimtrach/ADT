@@ -5,13 +5,14 @@ from backend.app.services.account_structure import ACCOUNT_CODE, MONEY_KEYS
 from backend.app.services.hypothesis_planner import SourceStructure, PlanSelection
 from backend.app.services.table_regions import is_blank, trailing_control
 from backend.app.services.templates import get_template
+from backend.app.services.explicit_feedback import apply_bounds
 
 
 def complete_mapping(mapping):
     return bool(mapping and all(mapping.get(k) for k in ("account", "account_name", *MONEY_KEYS)))
 
 
-def plan_from_explicit_mapping(path, data_type, template_id, mapping):
+def plan_from_explicit_mapping(path, data_type, template_id, mapping, instructions=None):
     source = SourceStructure(path)
     try:
         candidates = []
@@ -36,9 +37,14 @@ def plan_from_explicit_mapping(path, data_type, template_id, mapping):
                 row_rules=RowRules(account_tree=True, classify_account_rows=True), confidence=0.98,
                 notes=["Колонки заданы явно пользователем; шапка не требуется для сопоставления полей",
                        f"Данные: строки {start}–{end - 1 if control else end}"]
-                      + ([f"Контрольная строка: {control}"] if control else []),
+                      + ([f"Итоговая строка: {control}"] if control else []),
             )
-            candidates.append(source.evaluate(spec, data_type, region_start=1))
+            if instructions is not None:
+                spec = apply_bounds(spec, instructions, sheet)
+                spec.notes = ["Структура задана пользователем; значения и суммы проверяются",
+                              f"Данные: строки {spec.data_start_row}–{spec.data_end_row}"]
+            candidates.append(source.evaluate(spec, data_type, region_start=1,
+                                             preserve_bounds=bool(instructions and instructions.has_bounds)))
         if not candidates:
             raise AppError(422, "В указанных колонках не найдена таблица счетов с числовыми суммами", "INVALID_COLUMN_MAPPING")
         if len(candidates) != 1:

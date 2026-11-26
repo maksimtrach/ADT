@@ -30,9 +30,11 @@ class OpenAICompatibleAdapter(LLMAdapter):
             "model": self.profile.model,
             "stream": False,
             "temperature": self.profile.generation.temperature,
-            "max_tokens": self.profile.generation.max_tokens,
+            "max_tokens": self.profile.generation.token_limit(schema_name),
             "messages": messages,
         }
+        if self.profile.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.profile.reasoning_effort
         if self.profile.structured_output:
             payload["response_format"] = {
                 "type": "json_schema",

@@ -78,18 +78,18 @@ def test_ollama_planner_records_exact_request_and_response(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return None
 
-        def post(self, url, *, json):
+        async def post(self, url, *, json):
             posted["url"] = url
             posted["json"] = json
             return FakeResponse()
 
-    monkeypatch.setattr("backend.app.services.llm.base.httpx.Client", FakeClient)
+    monkeypatch.setattr("backend.app.services.llm.base.httpx.AsyncClient", FakeClient)
     events: list[tuple[str, dict]] = []
 
     result = LLMPlanner(configuration).refine(
@@ -140,18 +140,18 @@ def test_openai_compatible_planner_uses_json_schema(monkeypatch):
         def __init__(self, **kwargs):
             posted["client_kwargs"] = kwargs
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return None
 
-        def post(self, url, *, json):
+        async def post(self, url, *, json):
             posted["url"] = url
             posted["json"] = json
             return FakeResponse()
 
-    monkeypatch.setattr("backend.app.services.llm.base.httpx.Client", FakeClient)
+    monkeypatch.setattr("backend.app.services.llm.base.httpx.AsyncClient", FakeClient)
 
     result = LLMPlanner(configuration).refine(PROFILE, baseline, DataType.TRIAL_BALANCE)
 
@@ -199,18 +199,18 @@ def test_planner_falls_back_to_next_profile(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return None
 
-        def post(self, url, *, json):
+        async def post(self, url, *, json):
             if url.startswith("http://192.0.2.1"):
                 raise ConnectionError("remote unavailable")
             return FakeResponse()
 
-    monkeypatch.setattr("backend.app.services.llm.base.httpx.Client", FakeClient)
+    monkeypatch.setattr("backend.app.services.llm.base.httpx.AsyncClient", FakeClient)
     events: list[tuple[str, dict]] = []
 
     result = LLMPlanner(configuration).refine(

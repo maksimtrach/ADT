@@ -20,6 +20,11 @@ import { EmptyState, ErrorState, SkeletonRows } from "../components/ui/data-stat
 import { Select, Textarea } from "../components/ui/input";
 import { useToast } from "../components/ui/toast";
 import { TechnicalMemo } from "../features/transformations/technical-memo";
+import { RecognizedStructurePanel } from "../features/transformations/recognized-structure";
+import { ProcessingError } from "../features/transformations/processing-error";
+import { feedbackDraft } from "../features/transformations/feedback-draft";
+import { ProcessingProgress } from "../features/transformations/processing-progress";
+import { ValidationDetailsPanel } from "../features/transformations/validation-details";
 import { api, ApiError, downloadResult } from "../lib/api";
 import type { DataType, DocumentProfile, PreviewResponse, SourcePreview, TemplateInfo, TransformationDetail, TransformationSummary } from "../lib/types";
 
@@ -71,6 +76,15 @@ export function TransformationPage() {
     enabled: Boolean(selectedId),
     refetchInterval: (query) => query.state.data?.status === "RUNNING" || query.state.data?.status === "QUEUED" ? 1000 : false,
   });
+  const draftedRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (current.data?.status !== "FAILED" || current.data.data_type !== "TRIAL_BALANCE") return;
+    const key = `${current.data.id}:${current.data.processing_run_id ?? current.data.updated_at}`;
+    if (draftedRun.current === key) return;
+    draftedRun.current = key;
+    setFeedback((existing) => existing.trim() ? existing : feedbackDraft(current.data?.correction_structure ?? current.data?.recognized_structure));
+  }, [current.data]);
+
   const preview = useQuery({
     queryKey: ["preview", selectedId, current.data?.version],
     queryFn: () => api<PreviewResponse>(`/transformations/${selectedId}/preview`),
@@ -197,6 +211,17 @@ export function TransformationPage() {
     },
     onError: (error) => toast.show(error.message, "error"),
   });
+  const acceptErrors = useMutation({
+    mutationFn: (id: string) => api<TransformationDetail>(`/transformations/${id}/accept-errors`, { method: "POST" }),
+    onSuccess: (item) => {
+      queryClient.setQueryData(["transformation", item.id], item);
+      void queryClient.invalidateQueries({ queryKey: ["transformation", item.id] });
+      void queryClient.invalidateQueries({ queryKey: ["transformation-memo", item.id] });
+      void queryClient.invalidateQueries({ queryKey: ["transformations"] });
+      toast.show("Запущена загрузка результата с ошибками");
+    },
+    onError: (error) => toast.show(error.message, "error"),
+  });
   function clearWorkspace() {
     uploadGeneration.current += 1;
     sheetGeneration.current += 1;
@@ -238,7 +263,7 @@ export function TransformationPage() {
     catch (error) { toast.show(error instanceof Error ? error.message : "Не удалось скачать файл", "error"); }
   };
   const processing = current.data?.status === "QUEUED" || current.data?.status === "RUNNING";
-  const retryDisabled = retry.isPending || processing || !current.data;
+  const retryDisabled = retry.isPending || acceptErrors.isPending || processing || !current.data;
   const startNewTransformation = () => {
     if (selectedId && processing) cancel.mutate(selectedId);
     else clearWorkspace();
@@ -321,7 +346,7 @@ export function TransformationPage() {
           <CardHeader title="3. Статус преобразования" description={current.data ? current.data.source_filename : "Этапы появляются после загрузки файла"} />
           {!selectedId ? <EmptyState title="Обработка не запущена" description="Выберите XLSX-файл и целевой формат." /> : current.isLoading ? <SkeletonRows count={5} /> : current.isError ? <div className="p-5"><ErrorState message={current.error.message} retry={() => void current.refetch()} /></div> : current.data && (
             <div className="p-5">
-              <div className="mb-5 flex items-center justify-between"><Badge value={current.data.status} /><span className="text-xs text-slate-500">Версия {current.data.version || "—"}</span></div>
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><Badge value={current.data.status} /><ProcessingProgress detail={current.data} /></div><span className="text-xs text-slate-500">Версия {current.data.version || "—"}</span></div>
               <div className="space-y-1">
                 {stages.map(([key, label], index) => {
                   const activeIndex = stages.findIndex(([stage]) => stage === current.data?.current_stage);
@@ -330,15 +355,49 @@ export function TransformationPage() {
                   return <div key={key} className={`flex items-center gap-3 rounded px-3 py-2.5 text-sm ${active ? "bg-blue-50 text-blue-800" : done ? "text-emerald-700" : "text-slate-400"}`}><div className={`flex h-6 w-6 items-center justify-center rounded-full border ${active ? "border-action bg-action text-white" : done ? "border-emerald-500 bg-emerald-50" : "border-slate-300"}`}>{done ? <Check className="h-3.5 w-3.5" /> : active ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : index + 1}</div><span className={active || done ? "font-medium" : ""}>{label}</span></div>;
                 })}
               </div>
-              {current.data.error_message && <div className="mt-5 flex gap-2 border border-red-200 bg-red-50 p-3 text-sm text-red-700"><AlertTriangle className="h-5 w-5 shrink-0" />{current.data.error_message}</div>}
+              {current.data.recognized_structure && <RecognizedStructurePanel structure={current.data.recognized_structure} />}
+              <ProcessingError error={current.data.error_details} fallback={current.data.error_message} />
+              {current.data.validation_details && <ValidationDetailsPanel validation={current.data.validation_details} />}
+              {current.data.can_accept_errors && <div className="mt-4 space-y-2">
+                <p className="text-sm text-amber-800">Можно сформировать результат с текущими расхождениями. Они останутся отмечены в проверках и Excel.</p>
+                <Button variant="secondary" disabled={retryDisabled} loading={acceptErrors.isPending} onClick={() => acceptErrors.mutate(current.data.id)}>Загрузить с ошибками</Button>
+              </div>}
               {current.data.status === "CANCELLED" && <div className="mt-5 flex gap-2 border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"><AlertTriangle className="h-5 w-5 shrink-0" />Обработка прервана пользователем. Исходный файл сохранён, преобразование можно запустить повторно.</div>}
             </div>
           )}
       </Card>
+      <Card>
+          <CardHeader
+            title="4. Корректировки"
+            description={current.data?.status === "FAILED"
+              ? "Уточните структуру файла или правила обработки. Загружать файл заново не требуется."
+              : current.data?.status === "CANCELLED" ? "Обработка прервана. Можно повторно запустить сохранённый исходный файл."
+              : processing ? "Обработка выполняется. Повторный запуск будет доступен после её завершения."
+              : current.data ? "Уточните правила или повторите обработку сохранённого исходного файла." : "Корректировки станут доступны после первой обработки."}
+          />
+          <div className="space-y-3 p-5">
+            <div>
+              <label className="field-label" htmlFor="feedback">Комментарий к обработке</label>
+              <Textarea id="feedback" rows={12} value={feedback} disabled={retryDisabled} onChange={(event) => setFeedback(event.target.value)} placeholder="Например: Счет: A; Данные: 8–201; Итоги: 202" />
+            </div>
+            <p className="text-xs text-slate-500">Явные колонки и границы применяются с проверкой данных и итогов. Полная структура не требует LLM. Свободные замечания отправляйте отдельно от структурированного шаблона. При ошибке комментарий останется в поле.</p>
+            {current.data?.status === "FAILED" && current.data.data_type === "TRIAL_BALANCE" && <div className="space-y-2">
+              <p className="text-xs text-amber-800">Черновик составлен по результатам распознавания и может содержать ошибки. Проверьте колонки и границы перед повторной обработкой. Заполните пустые значения или удалите неизвестные строки. Допустимо: «Шапка: отсутствует», «Итоги: нет».</p>
+              <Button variant="secondary" disabled={retryDisabled} onClick={() => {
+                if (feedback.trim() && !window.confirm("Заменить текущий комментарий шаблоном?")) return;
+                setFeedback(feedbackDraft(current.data?.correction_structure ?? current.data?.recognized_structure));
+              }}>Вставить шаблон</Button>
+            </div>}
+            <div className="flex flex-wrap gap-3">
+              <Button variant="secondary" disabled={retryDisabled} onClick={() => { if (current.data) retry.mutate({ id: current.data.id }); }}><RotateCcw className="h-4 w-4" />Повторить без изменений</Button>
+              <Button disabled={retryDisabled || !feedback.trim()} loading={retry.isPending} onClick={() => { if (current.data) retry.mutate({ id: current.data.id, note: feedback.trim() }); }}><Send className="h-4 w-4" />Повторить с комментарием</Button>
+            </div>
+          </div>
+      </Card>
       <Card className="min-w-0 overflow-hidden">
           <div className="flex flex-wrap items-start justify-between gap-4 border-b px-5 py-4">
             <div>
-              <h2 className="font-display text-lg font-semibold text-navy">4. Результаты преобразования</h2>
+              <h2 className="font-display text-lg font-semibold text-navy">5. Результаты преобразования</h2>
               <p className="mt-1 text-sm text-slate-500">{current.data?.status === "COMPLETED" ? `${typeLabels[current.data.data_type]} · версия ${current.data.version}` : "Первые строки преобразованного файла"}</p>
             </div>
             {current.data?.status === "COMPLETED" && <div className="flex flex-wrap gap-2">
@@ -357,27 +416,13 @@ export function TransformationPage() {
           </> : <EmptyState title="Результат пока не готов" description={current.data?.status === "FAILED" ? "Обработка завершилась с ошибкой. Уточните правила в блоке корректировок." : current.data?.status === "CANCELLED" ? "Обработка прервана. Её можно повторить в блоке корректировок." : processing ? "Преобразование выполняется." : "Результат появится после преобразования файла."} />}
         </Card>
 
-      <Card>
-          <CardHeader
-            title="5. Корректировки"
-            description={current.data?.status === "FAILED"
-              ? "Уточните структуру файла или правила обработки. Загружать файл заново не требуется."
-              : current.data?.status === "CANCELLED" ? "Обработка прервана. Можно повторно запустить сохранённый исходный файл."
-              : processing ? "Обработка выполняется. Повторный запуск будет доступен после её завершения."
-              : current.data ? "Уточните правила или повторите обработку сохранённого исходного файла." : "Корректировки станут доступны после первой обработки."}
-          />
-          <div className="space-y-3 p-5">
-            <div>
-              <label className="field-label" htmlFor="feedback">Комментарий к обработке</label>
-              <Textarea id="feedback" value={feedback} disabled={retryDisabled} onChange={(event) => setFeedback(event.target.value)} placeholder="Например: Брать счета из колонки C" />
-            </div>
-            <p className="text-xs text-slate-500">Явное указание колонки применяется без LLM. Для других замечаний используется настроенный профиль модели. При ошибке комментарий останется в поле для редактирования.</p>
-            <div className="flex flex-wrap gap-3">
-              <Button variant="secondary" disabled={retryDisabled} onClick={() => { if (current.data) retry.mutate({ id: current.data.id }); }}><RotateCcw className="h-4 w-4" />Повторить без изменений</Button>
-              <Button disabled={retryDisabled || !feedback.trim()} loading={retry.isPending} onClick={() => { if (current.data) retry.mutate({ id: current.data.id, note: feedback.trim() }); }}><Send className="h-4 w-4" />Повторить с комментарием</Button>
-            </div>
-          </div>
-        {current.data && <TechnicalMemo transformationId={current.data.id} status={current.data.status} />}
+      <Card aria-label="6. Техническое мемо">
+        {current.data
+          ? <TechnicalMemo transformationId={current.data.id} status={current.data.status} />
+          : <>
+              <CardHeader title="6. Техническое мемо" description="Файл, исходные строки, правила, запрос и ответ LLM, преобразование и контроль" />
+              <EmptyState title="Мемо пока нет" description="Технические логи появятся после запуска преобразования." />
+            </>}
       </Card>
     </div>
   );

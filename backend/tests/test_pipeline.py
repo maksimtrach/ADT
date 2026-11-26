@@ -47,10 +47,10 @@ def test_synthetic_file_matches_expected(filename: str, data_type: DataType, tem
     assert not validation["missing_required"]
 
 
-def test_flat_trial_balance_target_has_account_name_as_third_field(tmp_path):
+def test_flat_trial_balance_target_has_account_name_as_second_field(tmp_path):
     template = get_template("trial_balance_flat_v1")
-    assert [column.key for column in template.columns[:3]] == ["account", "subaccount", "account_name"]
-    assert [column.label for column in template.columns[:3]] == ["Счет", "Субсчет", "Наименование счёта"]
+    assert [column.key for column in template.columns[:2]] == ["account", "account_name"]
+    assert [column.label for column in template.columns[:2]] == ["Счет", "Наименование счёта"]
 
     path = OUTPUT / "01-simple-trial-balance.xlsx"
     spec = rule_plan(path, DataType.TRIAL_BALANCE, template.id)
@@ -62,7 +62,8 @@ def test_flat_trial_balance_target_has_account_name_as_third_field(tmp_path):
     book = load_workbook(output, read_only=True)
     headers = [cell.value for cell in book["Результат"][1]]
     book.close()
-    assert headers[:3] == ["Счет", "Субсчет", "Наименование счёта"]
+    assert headers[:2] == ["Счет", "Наименование счёта"]
+    assert parsed.rows[1]["account"] == "51.01"
     assert headers[-5:] == [
         "Родительский счёт", "Уровень счёта", "Тип строки",
         "Строка родительского счёта", "Источник",

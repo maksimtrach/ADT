@@ -15,7 +15,11 @@ class GenerationOptions(BaseModel):
 
     temperature: float = Field(default=0, ge=0, le=2)
     max_tokens: int = Field(default=1800, ge=1)
+    candidate_max_tokens: int = Field(default=512, ge=1)
     context_size: int | None = Field(default=None, ge=512)
+
+    def token_limit(self, schema_name: str) -> int:
+        return min(self.max_tokens, self.candidate_max_tokens) if schema_name == "CandidateChoice" else self.max_tokens
 
 
 class LLMProfile(BaseModel):
@@ -28,6 +32,7 @@ class LLMProfile(BaseModel):
     timeout_seconds: int = Field(default=180, ge=1)
     connect_timeout_seconds: int = Field(default=10, ge=1)
     thinking: bool = False
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
     no_think_suffix: bool = False
     keep_alive: str | None = None
     api_key_env: str | None = None
@@ -62,6 +67,7 @@ class LLMConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     active_profile: str
+    total_timeout_seconds: int = Field(default=180, ge=1)
     fallback_profiles: list[str] = Field(default_factory=list)
     profiles: dict[str, LLMProfile]
 

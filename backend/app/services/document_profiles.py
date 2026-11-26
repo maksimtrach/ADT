@@ -26,12 +26,12 @@ class DocumentProfile:
         if not self.available or self.data_type is None:
             raise AppError(422, "Обработчик этого типа документа пока не реализован", "PROFILE_UNAVAILABLE")
 
-    def plan(self, path, template_id):
+    def plan(self, path, template_id, *, trace=None):
         from backend.app.services.hypothesis_planner import choose_plan
         self.require_available()
         if template_id not in self.template_ids:
             raise AppError(400, "Несовместимый целевой формат", "INVALID_TEMPLATE")
-        return choose_plan(path, self.data_type, template_id)
+        return choose_plan(path, self.data_type, template_id, trace=trace)
 
     def parse(self, path, spec):
         from backend.app.services.parser import parse_workbook

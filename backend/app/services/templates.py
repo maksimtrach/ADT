@@ -3,7 +3,6 @@ from backend.app.models.domain import DataType, TargetColumn, TemplateInfo
 
 TRIAL_BALANCE_COLUMNS = [
     TargetColumn(key="account", label="Счет", required=True),
-    TargetColumn(key="subaccount", label="Субсчет"),
     TargetColumn(key="account_name", label="Наименование счёта"),
     TargetColumn(key="opening_debit", label="Сальдо на начало Дт", kind="number"),
     TargetColumn(key="opening_credit", label="Сальдо на начало Кт", kind="number"),
@@ -29,7 +28,7 @@ TEMPLATES = {
         id="trial_balance_flat_v1",
         data_type=DataType.TRIAL_BALANCE,
         name="Плоская ОСВ",
-        description="Счета, субсчета, наименования счетов, начальные и конечные сальдо, дебетовые и кредитовые обороты.",
+        description="Счета, наименования счетов, начальные и конечные сальдо, дебетовые и кредитовые обороты.",
         columns=TRIAL_BALANCE_COLUMNS,
     ),
     "journal_flat_v1": TemplateInfo(

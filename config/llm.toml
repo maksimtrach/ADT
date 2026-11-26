@@ -1,3 +1,4 @@
+total_timeout_seconds = 60
 # Управляется через административную страницу настроек LLM.
 active_profile = "local_ollama"
 fallback_profiles = []
@@ -17,6 +18,7 @@ keep_alive = "10m"
 [profiles.local_ollama.generation]
 temperature = 0.0
 max_tokens = 1800
+candidate_max_tokens = 512
 context_size = 16384
 
 [profiles.remote_qwen35]
@@ -27,10 +29,12 @@ model = "qwen/qwen3.5-9b"
 timeout_seconds = 180
 connect_timeout_seconds = 5
 thinking = false
-no_think_suffix = true
+no_think_suffix = false
 structured_output = true
+reasoning_effort = "none"
 
 [profiles.remote_qwen35.generation]
 temperature = 0.0
-max_tokens = 1800
+max_tokens = 4096
+candidate_max_tokens = 512
 context_size = 16384

@@ -80,15 +80,17 @@ def export_result(
     if validation.get("row_balance"):
         controls.append(["Проверено построчных равенств", validation["row_balance"]["checked"]])
         controls.append(["Нарушено построчных равенств", validation["row_balance"]["failed"]])
+    for failure in validation.get("row_balance", {}).get("examples", []):
+        controls.append([f"Нарушение формулы: строка {failure['row']}", failure["difference"]])
     if spec.row_rules.account_tree:
         if validation.get("aggregation_available", True):
             controls.append(["Способ суммирования", "Двухзначные корневые счета: область подтверждена всеми шестью итогами" if validation.get("aggregation") == "two_digit_root_accounts" else "Только верхний уровень счетов; субсчета и валютные расшифровки не прибавляются повторно"])
-            controls.append(["Счетов в контрольной сумме", validation["control_row_count"]])
+            controls.append(["Счетов в итоговой сумме", validation["control_row_count"]])
         else:
             controls.append(["Способ суммирования", "Общие суммы не рассчитаны: неоднозначные коды счетов"])
     for kind, count in validation.get("row_classification", {}).items():
         controls.append([f"Тип строк: {kind}", count])
-    controls.append(["Контрольные строки источника", ", ".join(map(str, validation.get("control_rows", [])))])
+    controls.append(["Итоговые строки источника", ", ".join(map(str, validation.get("control_rows", [])))])
     if validation.get("scope_excluded_rows"):
         controls.append(["Корневые строки вне области сверки", ", ".join(map(str, validation["scope_excluded_rows"]))])
     for warning in validation["warnings"]:

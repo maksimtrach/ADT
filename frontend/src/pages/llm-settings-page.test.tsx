@@ -19,6 +19,7 @@ const response: LLMSettingsResponse = {
   environment_override: null,
   configuration: {
     active_profile: "local",
+    total_timeout_seconds: 180,
     fallback_profiles: [],
     profiles: {
       local: {
@@ -33,7 +34,8 @@ const response: LLMSettingsResponse = {
         keep_alive: "10m",
         api_key_env: null,
         structured_output: true,
-        generation: { temperature: 0, max_tokens: 1800, context_size: 16384 },
+        reasoning_effort: null,
+        generation: { temperature: 0, max_tokens: 1800, candidate_max_tokens: 512, context_size: 16384 },
       },
     },
   },
@@ -95,4 +97,39 @@ it("проверяет несохранённый профиль и сохран
   const saveCall = request.mock.calls.find(([path, init]) => path === "/llm-settings" && init?.method === "PUT");
   expect(JSON.parse(saveCall![1].body).profiles.local.model).toBe("qwen/new");
   expect(notify).toHaveBeenCalledWith("Настройки LLM сохранены");
+});
+
+it("сохраняет reasoning effort и отдельные лимиты токенов", async () => {
+  await act(async () => root.render(<QueryClientProvider client={client}><LLMSettingsPage /></QueryClientProvider>));
+  await settle();
+  const select = (label: string) => Array.from(container.querySelectorAll("label"))
+    .find((item) => item.querySelector("span")?.textContent === label)!.querySelector("select")!;
+  const input = (label: string) => Array.from(container.querySelectorAll("label"))
+    .find((item) => item.querySelector("span")?.textContent === label)!.querySelector("input")!;
+  await act(async () => {
+    const protocol = select("Протокол");
+    protocol.value = "openai";
+    protocol.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await act(async () => {
+    const effort = select("Reasoning effort");
+    effort.value = "none";
+    effort.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  for (const [label, value] of [["Максимум токенов", "4096"], ["Токенов для выбора гипотезы", "768"], ["Общий бюджет ожидания LLM, сек.", "120"]]) {
+    await act(async () => {
+      const control = input(label);
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(control, value);
+      control.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  await act(async () => button("Сохранить настройки")!.click());
+  await settle();
+  const saveCall = request.mock.calls.find(([path, init]) => path === "/llm-settings" && init?.method === "PUT");
+  const profile = JSON.parse(saveCall![1].body).profiles.local;
+  expect(JSON.parse(saveCall![1].body).total_timeout_seconds).toBe(120);
+  expect(profile.reasoning_effort).toBe("none");
+  expect(profile.generation.max_tokens).toBe(4096);
+  expect(profile.generation.candidate_max_tokens).toBe(768);
+  expect(select("Reasoning effort").value).toBe("none");
 });

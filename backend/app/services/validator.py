@@ -100,7 +100,7 @@ def validate_result(parsed: ParseResult, spec: TransformationSpec) -> dict[str, 
     if parsed.unprocessed_rows:
         warnings.append(f"Не обработано строк: {len(parsed.unprocessed_rows)}")
     if failed_controls:
-        warnings.append(f"Контрольные суммы не сошлись: {failed_controls}")
+        warnings.append(f"Итоговые суммы не сошлись: {failed_controls}")
     if not comparisons:
         warnings.append("Итоговые строки для независимой сверки не обнаружены")
     if balance_failures:
@@ -124,7 +124,7 @@ def validate_result(parsed: ParseResult, spec: TransformationSpec) -> dict[str, 
         "control_rows": parsed.control_rows,
         "scope_excluded_rows": scope_excluded_rows,
         "control_comparisons": comparisons,
-        "row_balance": {"checked": balance_checked, "failed": len(balance_failures), "examples": balance_failures[:20]},
+        "row_balance": {"checked": balance_checked, "failed": len(balance_failures), "examples": balance_failures},
         "duplicate_accounts": duplicates,
         "independent_totals_available": bool(comparisons),
         "row_classification": classifications,

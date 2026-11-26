@@ -24,6 +24,7 @@ export interface MemoryCase {
 export interface LLMGenerationOptions {
   temperature: number;
   max_tokens: number;
+  candidate_max_tokens: number;
   context_size: number | null;
 }
 export interface LLMProfile {
@@ -34,6 +35,7 @@ export interface LLMProfile {
   timeout_seconds: number;
   connect_timeout_seconds: number;
   thinking: boolean;
+  reasoning_effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
   no_think_suffix: boolean;
   keep_alive: string | null;
   api_key_env: string | null;
@@ -42,6 +44,7 @@ export interface LLMProfile {
 }
 export interface LLMConfiguration {
   active_profile: string;
+  total_timeout_seconds: number;
   fallback_profiles: string[];
   profiles: Record<string, LLMProfile>;
 }
@@ -75,15 +78,62 @@ export interface TransformationSummary {
   updated_at: string;
 }
 
+export type RecognitionSource = "RULES" | "LLM" | "USER" | "MEMORY";
+export interface RecognizedField {
+  key: string;
+  label: string;
+  column: number | null;
+  column_letter: string | null;
+  source: RecognitionSource | null;
+}
+export interface RecognizedStructure {
+  sheet_name: string;
+  header_start_row: number | null;
+  header_end_row: number | null;
+  data_start_row: number | null;
+  data_end_row: number | null;
+  control_rows: number[];
+  service_rows: number[];
+  header_source: RecognitionSource | null;
+  footer_source: RecognitionSource | null;
+  fields: RecognizedField[];
+}
+
+export interface TransformationErrorDetails {
+  stage: ProcessingStage | null;
+  code: string;
+  reason: string;
+  details: string[];
+  recommendation?: string | null;
+}
+
+export interface ValidationDetails {
+  control_rows?: number[];
+  aggregation?: string;
+  accepted_with_errors?: boolean;
+  control_comparisons?: Record<string, { declared: number; calculated: number | null; difference: number | null; passed: boolean }>;
+  row_balance?: { checked: number; failed: number; examples: { row: number; difference: number }[] };
+}
+
 export interface TransformationDetail extends TransformationSummary {
+  processing_run_id?: string | null;
+  run_started_at?: string | null;
+  run_finished_at?: string | null;
+  elapsed_seconds?: number;
+  current_operation?: string | null;
+  validation_details?: ValidationDetails | null;
+  can_accept_errors?: boolean;
   warnings: string[];
   error_message?: string;
+  error_details?: TransformationErrorDetails | null;
   controls: {
     calculated_sums?: Record<string, number>;
     control_comparisons?: Record<string, { declared: number; calculated: number; difference: number; passed: boolean }>;
     missing_required?: Record<string, number>;
   };
   llm_used: boolean;
+  recognized_structure?: RecognizedStructure | null;
+  correction_structure?: RecognizedStructure | null;
 }
 
 export interface PreviewResponse { columns: TargetColumn[]; rows: Array<Record<string, unknown>>; total: number; version: number }

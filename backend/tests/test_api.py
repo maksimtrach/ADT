@@ -30,7 +30,7 @@ def test_api_uses_llm_recovery_only_after_structural_failure(tmp_path, monkeypat
     planner, calls = fake_planner(monkeypatch, answer_layout())
     monkeypatch.setattr("backend.app.services.pipeline.LLMPlanner", lambda: planner)
     if failure_mode != "incomplete":
-        def no_structure(*args):
+        def no_structure(*args, **kwargs):
             if failure_mode == "technical":
                 raise RuntimeError("Техническая ошибка чтения")
             raise AppError(422, "Шапка не распознана", "STRUCTURE_NOT_RECOGNIZED")
@@ -48,6 +48,10 @@ def test_api_uses_llm_recovery_only_after_structural_failure(tmp_path, monkeypat
         detail = client.get(f"/api/transformations/{tid}").json()["data"]
         if failure_mode == "technical":
             assert detail["status"] == "FAILED"
+            assert detail["error_details"]["stage"] == "PLANNING"
+            assert detail["error_details"]["code"] == "PROCESSING_ERROR"
+            assert detail["error_details"]["reason"] == "Внутренняя ошибка приложения на этапе обработки"
+            assert detail["error_details"]["details"] == ["Тип технической ошибки: RuntimeError"]
             assert calls == []
             assert not list((tmp_path / "storage").rglob("result-v*.xlsx"))
             return
@@ -55,6 +59,15 @@ def test_api_uses_llm_recovery_only_after_structural_failure(tmp_path, monkeypat
         assert detail["llm_used"] is True
         assert detail["processed_rows"] == 3
         assert detail["controls"]["calculated_sums"]["opening_debit"] == 100
+        structure = detail["recognized_structure"]
+        assert structure["sheet_name"] == "ОСВ"
+        assert structure["data_start_row"] == 2
+        assert structure["data_end_row"] == 4
+        account = next(field for field in structure["fields"] if field["key"] == "account")
+        assert account == {
+            "key": "account", "label": "Счет", "column": 1,
+            "column_letter": "A", "source": "LLM",
+        }
         assert calls == ["first"]
         memo = client.get(f"/api/transformations/{tid}/memo").json()["data"]
         assert any(e["event_type"] == "LLM_STRUCTURE_ACCEPTED" for e in memo["events"])
@@ -184,6 +197,9 @@ def test_unresolved_structure_is_not_exported_and_can_be_clarified(tmp_path, mon
         assert detail["status"] == "FAILED"
         assert detail["version"] == 0
         assert "Брать счета из колонки C" in detail["error_message"]
+        assert detail["error_details"]["stage"] == "PLANNING"
+        assert detail["error_details"]["code"] == "STRUCTURE_AMBIGUOUS"
+        assert "Уточните" in detail["error_details"]["recommendation"]
         assert not list((tmp_path / "storage").rglob("result-v*.xlsx"))
         response = client.post(f"/api/transformations/{transformation_id}/retry",
                                json={"feedback": "Брать счета из колонки C"})
@@ -198,6 +214,21 @@ def test_auth_transform_and_admin_audit(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "database_path", tmp_path / "test.sqlite3")
     monkeypatch.setattr(settings, "storage_path", tmp_path / "storage")
     monkeypatch.setattr(OllamaPlanner, "available", lambda self: False)
+    from backend.app.api.transformations import _detail
+    from backend.app.services import pipeline
+    record_event = pipeline.record_run_event
+    live_operations = []
+
+    def capture_progress(run_id, tid, stage, kind, details, **kwargs):
+        record_event(run_id, tid, stage, kind, details, **kwargs)
+        if kind == "HYPOTHESIS_EVALUATION_STARTED":
+            with connection() as db:
+                row = db.execute("SELECT * FROM transformations WHERE id=?", (tid,)).fetchone()
+            operation = _detail(row).current_operation
+            assert operation.endswith(f"проверка гипотезы {details['hypothesis_number']} из {details['total']}")
+            live_operations.append(operation)
+
+    monkeypatch.setattr(pipeline, "record_run_event", capture_progress)
     initialize_database()
     add_user("user@example.test", "UserPassword123!", "USER")
     add_user("admin@example.test", "AdminPassword123!", "ADMIN")
@@ -235,15 +266,29 @@ def test_auth_transform_and_admin_audit(tmp_path, monkeypatch):
         memo_data = memo.json()["data"]
         assert memo_data["run"]["status"] == "COMPLETED"
         event_types = [event["event_type"] for event in memo_data["events"]]
-        assert event_types == [
+        progress_types = {"HYPOTHESES_GENERATION_STARTED", "HYPOTHESES_PREPARATION_STARTED",
+                          "HYPOTHESIS_EVALUATION_STARTED", "HYPOTHESES_SELECTION_STARTED"}
+        progress = [event for event in memo_data["events"] if event["event_type"] in progress_types]
+        assert progress[0]["event_type"] == "HYPOTHESES_GENERATION_STARTED"
+        assert progress[1]["event_type"] == "HYPOTHESES_PREPARATION_STARTED"
+        assert progress[-1]["event_type"] == "HYPOTHESES_SELECTION_STARTED"
+        checks = [event["details"] for event in progress if event["event_type"] == "HYPOTHESIS_EVALUATION_STARTED"]
+        assert checks
+        assert len(live_operations) == len(checks)
+        assert [check["hypothesis_number"] for check in checks] == list(range(1, len(checks) + 1))
+        assert all(check["total"] == len(checks) for check in checks)
+        assert [kind for kind in event_types if kind not in progress_types] == [
             "FILE_OPENED",
             "PROFILE_CREATED",
             "SOURCE_SAMPLE",
             "DOCUMENT_PROFILE_SELECTED",
             "HYPOTHESES_EVALUATED",
             "BASELINE_SPEC_CREATED",
+            "STRUCTURE_RECOGNIZED",
             "BASELINE_CHECKED",
             "LLM_SKIPPED",
+            "CANDIDATE_VALIDATED",
+            "STRUCTURE_RECOGNIZED",
             "FINAL_SPEC_APPLIED",
             "PARSING_COMPLETED",
             "VALIDATION_COMPLETED",

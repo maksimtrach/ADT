@@ -11,6 +11,7 @@ from backend.app.core.errors import AppError
 from backend.app.models.domain import DataType, RowRules, TransformationSpec
 from backend.app.services.account_structure import MONEY_KEYS
 from backend.app.services.llm_context import sheet_context, llm_candidate_summary
+from backend.app.services.llm.budget import LLMRequestError, transport_error
 from backend.app.services.hypothesis_planner import SourceStructure
 from backend.app.services.rule_planner import _header_columns, _merged_values, standard_money_mapping
 from backend.app.services.templates import get_template
@@ -105,13 +106,13 @@ def build_recovered_spec(layout, source, data_type, template_id, user_mapping=No
                            standard_money_order=assumed),
         confidence=0.9,
         notes=["Структура предложена LLM и проверена пробным разбором; исходные значения не изменены"]
-              + ([f"Контрольная строка {control} выделена отдельно от данных"] if control else [])
+              + ([f"Итоговая строка {control} выделена отдельно от данных"] if control else [])
               + (["Явные указания колонок пользователя имеют приоритет над предложением модели"] if user_mapping else [])
               + (["Использован стандартный порядок денежных колонок Дт/Кт без подписей сторон"] if assumed else []),
     )
 
 
-def recognize_structure(planner, path: Path, data_type, template_id, selection, trace=None, feedback=None):
+def _recognize_structure_legacy(planner, path: Path, data_type, template_id, selection, trace=None, feedback=None):
     source = SourceStructure(path)
     try:
         request = {
@@ -148,9 +149,11 @@ def recognize_structure(planner, path: Path, data_type, template_id, selection, 
                      {"role": "user", "content": prompt}], StructureAnswer.model_json_schema(), "StructureAnswer", trace,
                 )
                 break
-            except (httpx.HTTPError, OSError, RuntimeError) as error:
-                if index + 1 == len(planner.adapters):
-                    raise AppError(503, "Модели недоступны для распознавания структуры", "LLM_UNAVAILABLE") from error
+            except (httpx.HTTPError, OSError, RuntimeError, LLMRequestError) as error:
+                if index + 1 == len(planner.adapters) or planner.budget.remaining <= 0:
+                    if isinstance(error, AppError):
+                        raise
+                    raise transport_error(adapter, error) from error
                 if trace:
                     trace("LLM_PROFILE_FALLBACK", {"from_profile": adapter.profile_name,
                           "to_profile": planner.adapters[index + 1].profile_name, "reason": str(error)[:300]})
@@ -180,3 +183,11 @@ def recognize_structure(planner, path: Path, data_type, template_id, selection, 
         raise
     finally:
         source.close()
+
+
+def recognize_structure(planner, path: Path, data_type, template_id, selection, trace=None, feedback=None):
+    from backend.app.services.staged_structure_recovery import recognize_structure_staged
+
+    return recognize_structure_staged(
+        planner, path, data_type, template_id, selection, trace=trace, feedback=feedback
+    )

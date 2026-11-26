@@ -288,13 +288,13 @@ def _target_columns(
     text_columns = [account]
     used = {"account"}
     for column in template_columns:
-        if column.kind == "number" or column.key in {"account", "subaccount", "account_name"}:
+        if column.kind == "number" or column.key in {"account", "account_name"}:
             continue
         text_columns.append(column)
         used.add(column.key)
     for column in template_columns:
         if (
-            column.key in {"subaccount", "account_name"}
+            column.key == "account_name"
             and mapping.get(column.key) is not None
             and mapping[column.key] != source_column
         ):
@@ -320,6 +320,9 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
         max_scan_column = min(worksheet.max_column, 120)
         merged_values = _merged_values(worksheet)
         # Candidate bands contain text headers, not numeric data records.
+        header_merges = [merged for merged in worksheet.merged_cells.ranges
+                         if merged.min_row <= 100 and merged.min_col < merged.max_col
+                         and merged.min_col <= max_scan_column]
         header_rows = set()
         for row in worksheet.iter_rows(max_row=min(worksheet.max_row, 100), max_col=max_scan_column):
             values = [cell.value for cell in row if cell.value not in (None, "")]
@@ -341,6 +344,17 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
                     max_scan_column,
                     merged_values,
                 )
+                # A merged header is not evidence for its empty non-anchor cells.
+                name_shadows = set()
+                for merged in header_merges:
+                    if not (start_row <= merged.min_row <= end_row) or merged.min_col == merged.max_col:
+                        continue
+                    if not _column_has_data(worksheet, merged.min_col, end_row + 1, actual_end):
+                        continue
+                    for column in range(merged.min_col + 1, min(merged.max_col, max_scan_column) + 1):
+                        if (values[column - 1] == values[merged.min_col - 1]
+                                and not _column_has_data(worksheet, column, end_row + 1, actual_end)):
+                            name_shadows.add(column)
                 mapping: dict[str, int | None] = {}
                 scores: list[float] = []
                 used: set[int] = set()
@@ -349,6 +363,7 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
                         (_column_score(target.key, value, ALIASES.get(target.key, [target.label]), data_type == DataType.TRIAL_BALANCE), -(index + 1))
                         for index, value in enumerate(values)
                         if index + 1 not in used
+                        and not (target.key == "account_name" and index + 1 in name_shadows)
                     ]
                     score, negative_column = max(matches, default=(0.0, 0))
                     column = -negative_column
@@ -358,6 +373,17 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
                         used.add(column)
                     else:
                         mapping[target.key] = None
+                # Some sources store the most detailed account code in a
+                # separate subaccount column. It is an input helper, not a
+                # target field; the parser coalesces it into "account".
+                detail_matches = [
+                    (_column_score("subaccount", value, ALIASES["subaccount"], True), -(index + 1))
+                    for index, value in enumerate(values)
+                    if index + 1 not in used
+                ] if data_type == DataType.TRIAL_BALANCE else []
+                detail_score, detail_negative_column = max(detail_matches, default=(0.0, 0))
+                if detail_score >= 0.55:
+                    mapping["_account_detail"] = -detail_negative_column
                 matched = sum(value is not None for value in mapping.values())
                 required_matched = sum(mapping[column.key] is not None for column in template.columns if column.required)
                 total_required = sum(column.required for column in template.columns)
@@ -392,6 +418,8 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
                     for index, value in enumerate(values, 1):
                         if index == current or index in mapping.values():
                             continue
+                        if target.key == "account_name" and index in name_shadows:
+                            continue
                         score = _column_score(target.key, value, ALIASES.get(target.key, [target.label]), data_type == DataType.TRIAL_BALANCE)
                         if score >= max(0.55, current_score - 0.12):
                             if (target.kind == "number"
@@ -414,7 +442,7 @@ def rule_candidates(path: Path, data_type: DataType, template_id: str) -> list[T
             continue
         signatures.add(signature)
         selected.append(_build_spec(candidate, data_type, template_id))
-        if len(selected) == 12:
+        if len(selected) == 7:
             break
     return selected
 
@@ -429,25 +457,29 @@ def _build_spec(candidate, data_type: DataType, template_id: str) -> Transformat
         source_labels = labels_by_column[source_column - 1]
         # "Счет / Код" describes one field, not two analytic levels.
         code_header = any(normalize_header(label) == "код" for label in source_labels)
-        account_name_column = next(
-            (index + 1 for index, labels in enumerate(labels_by_column)
-             if any("наименование" in normalize_header(label)
-                    and (code_header or "счет" in normalize_header(label)
-                         or (index + 1 == source_column + 1 and normalize_header(label) == "наименование")) for label in labels)), None
-        )
+        proposed_name_column = mapping.get("account_name")
+        if proposed_name_column is not None:
+            name_labels = labels_by_column[proposed_name_column - 1]
+            if any("наименование" in normalize_header(label)
+                   and (code_header or "счет" in normalize_header(label)
+                        or (proposed_name_column == source_column + 1
+                            and normalize_header(label) == "наименование")) for label in name_labels):
+                account_name_column = proposed_name_column
         levels = [] if code_header or account_name_column else _hierarchy_levels(source_labels, allow_unknown=True)
         if len(levels) > 1:
             hierarchy = HierarchyRule(source_column=source_column, levels=levels)
+    account_detail_column = mapping.get("_account_detail")
     target_columns, mapping = _target_columns(template.columns, mapping, hierarchy)
     account_tree = account_name_column is not None or (code_tree and hierarchy is None)
     if account_tree:
         target_columns = list(template.columns)
         mapping = {column.key: mapping.get(column.key) for column in target_columns}
-        mapping["account_name"] = account_name_column
-    matched = sum(value is not None for value in mapping.values())
+        if account_detail_column is not None:
+            mapping["_account_detail"] = account_detail_column
+    matched = sum(mapping.get(column.key) is not None for column in target_columns)
     confidence = min(0.98, matched / max(len(target_columns), 1) + 0.18)
     inherit = [] if account_tree else [level.key for level in hierarchy.levels] if hierarchy else (
-        ["account", "subaccount", "account_name"] if data_type == DataType.TRIAL_BALANCE else []
+        ["account", "account_name"] if data_type == DataType.TRIAL_BALANCE else []
     )
     notes = [
         f"Шапка определена в строках {header_start_row}–{header_end_row}",
@@ -467,7 +499,7 @@ def _build_spec(candidate, data_type: DataType, template_id: str) -> Transformat
         if account_name_column is not None:
             confidence_keys.add("account_name")
         confidence = min(0.98, sum(mapping.get(key) is not None for key in confidence_keys) / len(confidence_keys))
-        notes.append("Счета и субсчета сохранены; контрольные суммы рассчитываются по верхнему уровню без повторного сложения дочерних счетов")
+        notes.append("Счета и субсчета сохранены; итоговые суммы рассчитываются по верхнему уровню без повторного сложения дочерних счетов")
     missing = [column.label for column in target_columns if mapping[column.key] is None and column.key not in inherit and column.key not in derived]
     if missing:
         notes.append("Не найдены поля: " + ", ".join(missing))

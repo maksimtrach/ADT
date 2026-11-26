@@ -1,7 +1,6 @@
 [
   {
-    "account": "76",
-    "subaccount": "76.05",
+    "account": "76.05",
     "account_name": "Расчеты с разными дебиторами",
     "opening_debit": 100.0,
     "opening_credit": null,
@@ -11,8 +10,7 @@
     "closing_credit": null
   },
   {
-    "account": "76",
-    "subaccount": "76.05",
+    "account": "76.05",
     "account_name": "Расчеты с разными дебиторами",
     "opening_debit": 200.0,
     "opening_credit": null,

@@ -39,9 +39,9 @@ def simple_trial_balance() -> None:
     style_header(sheet)
     workbook.save(OUTPUT / "01-simple-trial-balance.xlsx")
     save_expected("01-simple-trial-balance", [
-        {"account": "50.01", "subaccount": None, "account_name": "Касса", "opening_debit": 1000.0, "opening_credit": None, "turnover_debit": 500.0, "turnover_credit": 300.0, "closing_debit": 1200.0, "closing_credit": None},
-        {"account": "51", "subaccount": "51.01", "account_name": "Основной счет", "opening_debit": 15000.0, "opening_credit": None, "turnover_debit": 2500.0, "turnover_credit": 4000.0, "closing_debit": 13500.0, "closing_credit": None},
-        {"account": "60.01", "subaccount": None, "account_name": "Поставщик Альфа", "opening_debit": None, "opening_credit": 2000.0, "turnover_debit": 7500.0, "turnover_credit": 6000.0, "closing_debit": None, "closing_credit": 500.0},
+        {"account": "50.01", "account_name": "Касса", "opening_debit": 1000.0, "opening_credit": None, "turnover_debit": 500.0, "turnover_credit": 300.0, "closing_debit": 1200.0, "closing_credit": None},
+        {"account": "51.01", "account_name": "Основной счет", "opening_debit": 15000.0, "opening_credit": None, "turnover_debit": 2500.0, "turnover_credit": 4000.0, "closing_debit": 13500.0, "closing_credit": None},
+        {"account": "60.01", "account_name": "Поставщик Альфа", "opening_debit": None, "opening_credit": 2000.0, "turnover_debit": 7500.0, "turnover_credit": 6000.0, "closing_debit": None, "closing_credit": 500.0},
     ])
 
 
@@ -56,8 +56,8 @@ def grouped_trial_balance() -> None:
     style_header(sheet)
     workbook.save(OUTPUT / "02-grouped-trial-balance.xlsx")
     save_expected("02-grouped-trial-balance", [
-        {"account": "62.01", "subaccount": None, "account_name": "Расчеты с покупателями", "opening_debit": 2000.0, "opening_credit": None, "turnover_debit": 3000.0, "turnover_credit": 1000.0, "closing_debit": 4000.0, "closing_credit": None},
-        {"account": "62.02", "subaccount": None, "account_name": "Расчеты по авансам", "opening_debit": 500.0, "opening_credit": None, "turnover_debit": 700.0, "turnover_credit": 300.0, "closing_debit": 900.0, "closing_credit": None},
+        {"account": "62.01", "account_name": "Расчеты с покупателями", "opening_debit": 2000.0, "opening_credit": None, "turnover_debit": 3000.0, "turnover_credit": 1000.0, "closing_debit": 4000.0, "closing_credit": None},
+        {"account": "62.02", "account_name": "Расчеты по авансам", "opening_debit": 500.0, "opening_credit": None, "turnover_debit": 700.0, "turnover_credit": 300.0, "closing_debit": 900.0, "closing_credit": None},
     ])
 
 
@@ -75,8 +75,8 @@ def merged_trial_balance() -> None:
     style_header(sheet)
     workbook.save(OUTPUT / "03-merged-trial-balance.xlsx")
     save_expected("03-merged-trial-balance", [
-        {"account": "76", "subaccount": "76.05", "account_name": "Расчеты с разными дебиторами", "opening_debit": 100.0, "opening_credit": None, "turnover_debit": 400.0, "turnover_credit": 250.0, "closing_debit": 250.0, "closing_credit": None},
-        {"account": "76", "subaccount": "76.05", "account_name": "Расчеты с разными дебиторами", "opening_debit": 200.0, "opening_credit": None, "turnover_debit": 300.0, "turnover_credit": 100.0, "closing_debit": 400.0, "closing_credit": None},
+        {"account": "76.05", "account_name": "Расчеты с разными дебиторами", "opening_debit": 100.0, "opening_credit": None, "turnover_debit": 400.0, "turnover_credit": 250.0, "closing_debit": 250.0, "closing_credit": None},
+        {"account": "76.05", "account_name": "Расчеты с разными дебиторами", "opening_debit": 200.0, "opening_credit": None, "turnover_debit": 300.0, "turnover_credit": 100.0, "closing_debit": 400.0, "closing_credit": None},
     ])
 
 

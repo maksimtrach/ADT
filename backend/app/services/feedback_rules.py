@@ -13,7 +13,7 @@ def _column(value):
         return None
 
 
-def explicit_column_feedback(feedback: str | None) -> dict[str, int] | None:
+def legacy_column_feedback(feedback: str | None) -> dict[str, int] | None:
     if not feedback or not feedback.strip():
         return None
     clauses = re.split(r"[,;\n]+", feedback.lower().replace("ё", "е").strip().rstrip(".!"))
@@ -45,3 +45,8 @@ def explicit_column_feedback(feedback: str | None) -> dict[str, int] | None:
     if len(set(mapping.values())) != len(mapping):
         raise AppError(422, "Одна колонка назначена разным полям", "INVALID_COLUMN_MAPPING")
     return mapping
+
+
+def explicit_column_feedback(feedback: str | None) -> dict[str, int] | None:
+    from backend.app.services.explicit_feedback import parse_feedback
+    return parse_feedback(feedback).mapping or None

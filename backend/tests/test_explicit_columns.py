@@ -53,7 +53,8 @@ def missing_header_file(tmp_path):
 def test_complete_comment_is_a_locked_mapping():
     assert explicit_column_feedback(FEEDBACK) == MAPPING
     assert explicit_column_feedback("Брать счета из колонки А; наименование счета из колонки В") == {"account": 1, "account_name": 2}
-    assert explicit_column_feedback("Брать счета из колонки A, а строки 5–8 исправить") is None
+    with pytest.raises(AppError, match="Не распознана строка"):
+        explicit_column_feedback("Брать счета из колонки A, а строки 5–8 исправить")
     with pytest.raises(AppError, match="Противоречивые"):
         explicit_column_feedback("Брать счета из колонки A, брать счета из колонки B")
     with pytest.raises(AppError, match="разным полям"):
@@ -92,7 +93,7 @@ def test_llm_flat_with_name_is_normalized_and_total_retained(missing_header_file
     try:
         layout = StructureLayout(sheet_name="ОСВ", header_start_row=1, header_end_row=2,
                                  data_start_row=3, data_end_row=data_end, row_mode="flat",
-                                 column_mapping={**MAPPING, "subaccount": None})
+                                 column_mapping=MAPPING)
         spec = build_recovered_spec(layout, source, DataType.TRIAL_BALANCE, "trial_balance_flat_v1")
         assert spec.row_rules.account_tree
         assert spec.control_rows == [13]

@@ -10,6 +10,8 @@ import httpx
 from dotenv import dotenv_values
 
 from backend.app.core.llm_config import LLMProfile
+from backend.app.core.errors import AppError
+from backend.app.services.llm.budget import LLMTimeBudget, post_with_deadline, transport_error
 
 TraceCallback = Callable[[str, dict[str, Any]], None]
 
@@ -25,6 +27,8 @@ class LLMAdapter(ABC):
     def __init__(self, profile_name: str, profile: LLMProfile) -> None:
         self.profile_name = profile_name
         self.profile = profile
+
+        self.budget = LLMTimeBudget(profile.timeout_seconds)
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -80,51 +84,60 @@ class LLMAdapter(ABC):
         schema_name: str,
         trace: TraceCallback | None = None,
     ) -> LLMCallResult:
+        self.budget.start()
+        self.budget.require_time(self.profile.model)
         endpoint, request_payload = self.build_request(messages, schema, schema_name)
         if trace:
-            trace("LLM_REQUEST", {**self.metadata, "endpoint": endpoint, "payload": request_payload})
+            trace("LLM_REQUEST", {**self.metadata, "endpoint": endpoint, "payload": request_payload,
+                                  "budget_remaining_seconds": round(self.budget.remaining, 3),
+                                  "timeout_seconds": min(self.profile.timeout_seconds, self.budget.remaining)})
         started_at = perf_counter()
         try:
-            with httpx.Client(
-                timeout=httpx.Timeout(self.profile.timeout_seconds, connect=self.profile.connect_timeout_seconds),
-                trust_env=False,
-                headers=self.headers(),
-            ) as client:
-                response = client.post(endpoint, json=request_payload)
+            self.budget.require_time(self.profile.model)
+            response = post_with_deadline(
+                endpoint, request_payload, self.headers(),
+                min(self.profile.timeout_seconds, self.budget.remaining), self.profile.connect_timeout_seconds,
+            )
+            response.raise_for_status()
+            try:
                 response_payload = response.json()
-                traced_payload = dict(response_payload) if isinstance(response_payload, dict) else {"value": response_payload}
-                traced_payload.pop("context", None)
-                duration_ms = round((perf_counter() - started_at) * 1000)
-                if trace:
-                    trace(
-                        "LLM_RESPONSE",
-                        {
-                            **self.metadata,
-                            "status_code": response.status_code,
-                            "duration_ms": duration_ms,
-                            "payload": traced_payload,
-                        },
-                    )
-                response.raise_for_status()
-                if not isinstance(response_payload, dict):
-                    raise ValueError("LLM вернула ответ не в формате JSON-объекта")
+            except ValueError as error:
+                raise AppError(502, "LLM вернула ответ, который не является JSON", "INVALID_LLM_RESPONSE") from error
+            traced_payload = dict(response_payload) if isinstance(response_payload, dict) else {"value": response_payload}
+            traced_payload.pop("context", None)
+            duration_ms = round((perf_counter() - started_at) * 1000)
+            if trace:
+                trace("LLM_RESPONSE", {**self.metadata, "status_code": response.status_code,
+                                       "duration_ms": duration_ms, "payload": traced_payload})
+            if not isinstance(response_payload, dict):
+                raise AppError(502, "LLM вернула ответ не в формате JSON-объекта", "INVALID_LLM_RESPONSE")
+            choices = response_payload.get("choices") or []
+            truncated = (choices and choices[0].get("finish_reason") == "length") or response_payload.get("done_reason") == "length"
+            if truncated:
+                limit = self.profile.generation.token_limit(schema_name)
+                raise AppError(502, f"Ответ LLM обрезан по лимиту {limit} токенов. "
+                               "Увеличьте лимит ответа для этой операции в настройках LLM.", "LLM_RESPONSE_TRUNCATED")
+            try:
                 content = self.extract_content(response_payload)
-                if not content.strip():
-                    raise ValueError("LLM вернула пустой content")
-                return LLMCallResult(
-                    content=content,
-                    response_payload=response_payload,
-                    duration_ms=duration_ms,
-                )
+            except (KeyError, IndexError, TypeError, AttributeError) as error:
+                raise AppError(502, "LLM вернула ответ с недопустимой структурой", "INVALID_LLM_RESPONSE") from error
+            if not content.strip():
+                raise AppError(502, "LLM не вернула итоговый ответ (поле content пустое). Проверьте режим thinking модели.", "INVALID_LLM_RESPONSE")
+            return LLMCallResult(content=content, response_payload=response_payload, duration_ms=duration_ms)
         except Exception as error:
+            reported = (transport_error(self, error, perf_counter() - started_at)
+                        if isinstance(error, (TimeoutError, httpx.HTTPError, OSError, RuntimeError)) else error)
             if trace:
                 trace(
                     "LLM_FAILED",
                     {
                         **self.metadata,
                         "error_type": type(error).__name__,
-                        "message": str(error)[:1000],
+                        "message": str(reported)[:1000],
+                        "code": getattr(reported, "code", None),
                         "duration_ms": round((perf_counter() - started_at) * 1000),
                     },
                 )
-            raise
+            if reported is error:
+                raise
+            raise reported from error

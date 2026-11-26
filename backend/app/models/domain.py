@@ -110,6 +110,8 @@ class TransformationSpec(BaseModel):
     header_start_row: int | None = Field(default=None, ge=1)
     header_end_row: int | None = Field(default=None, ge=1)
     data_start_row: int = Field(ge=1)
+    explicit_bounds: bool = False
+    header_absent: bool = False
     data_end_row: int = Field(ge=1)
     control_rows: list[int] = Field(default_factory=list)
     column_mapping: dict[str, int | None]
@@ -144,11 +146,50 @@ class TransformationSummary(BaseModel):
     updated_at: datetime
 
 
+class RecognizedField(BaseModel):
+    key: str
+    label: str
+    column: int | None = None
+    column_letter: str | None = None
+    source: Literal["RULES", "LLM", "USER", "MEMORY"] | None = None
+
+
+class RecognizedStructure(BaseModel):
+    sheet_name: str
+    header_start_row: int | None = None
+    header_end_row: int | None = None
+    data_start_row: int | None = None
+    data_end_row: int | None = None
+    control_rows: list[int] = Field(default_factory=list)
+    service_rows: list[int] = Field(default_factory=list)
+    header_source: Literal["RULES", "LLM", "USER", "MEMORY"] | None = None
+    footer_source: Literal["RULES", "LLM", "USER", "MEMORY"] | None = None
+    fields: list[RecognizedField] = Field(default_factory=list)
+
+
+class TransformationErrorDetails(BaseModel):
+    stage: ProcessingStage | None = None
+    code: str
+    reason: str
+    details: list[str] = Field(default_factory=list)
+    recommendation: str | None = None
+
+
 class TransformationDetail(TransformationSummary):
+    processing_run_id: str | None = None
+    run_started_at: datetime | None = None
+    run_finished_at: datetime | None = None
+    elapsed_seconds: float = 0
+    current_operation: str | None = None
     warnings: list[str] = Field(default_factory=list)
     error_message: str | None = None
+    error_details: TransformationErrorDetails | None = None
     controls: dict[str, Any] = Field(default_factory=dict)
     llm_used: bool = False
+    recognized_structure: RecognizedStructure | None = None
+    correction_structure: RecognizedStructure | None = None
+    validation_details: dict[str, Any] | None = None
+    can_accept_errors: bool = False
 
 
 class PreviewResponse(BaseModel):

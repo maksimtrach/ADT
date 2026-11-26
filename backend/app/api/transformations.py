@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -48,12 +49,85 @@ def _summary(row) -> TransformationSummary:
     return TransformationSummary.model_validate(data)
 
 
+def _totals_wording(value):
+    """Display historical diagnostics with current terminology, without rewriting logs."""
+    if isinstance(value, str):
+        return re.sub(r"([Кк])онтрольн(\w*) (?=сумм|строк)",
+                      lambda m: ("И" if m[1] == "К" else "и") + "тогов" + m[2] + " ", value)
+    if isinstance(value, list):
+        return [_totals_wording(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _totals_wording(item) for key, item in value.items()}
+    return value
+
+
 def _detail(row) -> TransformationDetail:
     data = dict(row)
     data["version"] = data.pop("current_version")
     data["warnings"] = json_load(data.pop("warnings_json"), [])
     data["controls"] = json_load(data.pop("controls_json"), {})
     data["llm_used"] = bool(data["llm_used"])
+    from backend.app.services.accept_errors import latest_diagnostics, arithmetic_failures
+    diagnostic_spec, validation = latest_diagnostics(data["id"])
+    data["validation_details"] = validation
+    data["can_accept_errors"] = bool(
+        data["status"] == "FAILED" and diagnostic_spec and arithmetic_failures(validation)
+        and not validation.get("numeric_errors") and not validation.get("missing_required")
+        and not validation.get("unprocessed_row_numbers") and not validation.get("ambiguous_account_rows")
+    )
+    with connection() as db:
+        latest_run = db.execute(
+            """
+            SELECT id, started_at, finished_at FROM transformation_runs
+            WHERE transformation_id = ?
+            ORDER BY target_version DESC, started_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            (data["id"],),
+        ).fetchone()
+        recognized = db.execute(
+            """
+            SELECT details_json FROM transformation_run_events
+            WHERE run_id = ? AND event_type = 'STRUCTURE_RECOGNIZED'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (latest_run["id"],),
+        ).fetchone() if latest_run else None
+        failed = db.execute(
+            """
+            SELECT details_json FROM transformation_run_events
+            WHERE run_id = ? AND event_type = 'PROCESSING_FAILED'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (latest_run["id"],),
+        ).fetchone() if latest_run else None
+        progress_events = db.execute(
+            "SELECT event_type, stage, CASE WHEN event_type IN "
+            "('PROCESSING_FAILED', 'PROCESSING_CANCELLED', 'HYPOTHESIS_EVALUATION_STARTED') "
+            "THEN details_json ELSE NULL END AS details_json "
+            "FROM transformation_run_events WHERE run_id=? ORDER BY id",
+            (latest_run["id"],),
+        ).fetchall() if latest_run else []
+        correction_events = db.execute(
+            "SELECT event_type, details_json FROM transformation_run_events "
+            "WHERE run_id=? AND event_type IN ('STRUCTURE_RECOGNIZED', 'LLM_RESPONSE') ORDER BY id",
+            (latest_run["id"],),
+        ).fetchall() if latest_run and data["status"] == "FAILED" else []
+    from backend.app.services.correction_structure import correction_structure
+    from backend.app.services.progress import progress_details
+    data.update(progress_details(latest_run, row, progress_events))
+    data["recognized_structure"] = json_load(recognized["details_json"], None) if recognized else None
+    data["correction_structure"] = correction_structure(correction_events, data["template_id"]) if correction_events else None
+    failure = json_load(failed["details_json"], None) if failed else None
+    data["error_details"] = ({
+        "stage": failure.get("stage"), "code": failure.get("code", "PROCESSING_ERROR"),
+        "reason": failure.get("reason", data.get("error_message") or "Ошибка обработки файла"),
+        "details": failure.get("details", []), "recommendation": failure.get("recommendation"),
+    } if failure else None)
+    for key in ("error_message", "error_details", "warnings", "validation_details"):
+        data[key] = _totals_wording(data.get(key))
     return TransformationDetail.model_validate(data)
 
 
@@ -311,7 +385,7 @@ def cancel(transformation_id: str, user: UserPublic = Depends(current_user)):
             transformation_id,
             "CANCELLED",
             "PROCESSING_CANCELLED",
-            {"reason": "Пользователь начал новое преобразование"},
+            {"reason": "Пользователь начал новое преобразование", "stage": row["current_stage"]},
             level="WARNING",
         )
     record_audit(
@@ -322,6 +396,33 @@ def cancel(transformation_id: str, user: UserPublic = Depends(current_user)):
         details={"previousStatus": row["status"]},
     )
     return {"data": _detail(current)}
+
+
+@router.post("/{transformation_id}/accept-errors")
+def accept_errors(transformation_id: str, background_tasks: BackgroundTasks,
+                  user: UserPublic = Depends(current_user)):
+    from backend.app.models.domain import TransformationSpec
+    from backend.app.services.accept_errors import latest_diagnostics, assess_for_acceptance
+    row = _owned_row(transformation_id, user)
+    if row["status"] != "FAILED":
+        raise AppError(409, "Принять ошибки можно только после неуспешной обработки", "CANNOT_ACCEPT_ERRORS")
+    spec_data, _ = latest_diagnostics(transformation_id)
+    if not spec_data:
+        raise AppError(409, "Не сохранены правила разбора файла", "CANNOT_ACCEPT_ERRORS")
+    spec = TransformationSpec.model_validate(spec_data)
+    plan = assess_for_acceptance(Path(row["source_path"]), spec, DataType(row["data_type"]))
+    with connection() as db:
+        changed = db.execute(
+            "UPDATE transformations SET status='QUEUED', current_stage='QUEUED', error_message=NULL, updated_at=? "
+            "WHERE id=? AND status='FAILED'", (utc_now(), transformation_id),
+        )
+        if not changed.rowcount:
+            raise AppError(409, "Состояние обработки изменилось", "ALREADY_RUNNING")
+    run_id = create_processing_run(transformation_id, row["current_version"] + 1)
+    record_audit("TRANSFORMATION_ERRORS_ACCEPTED", user_id=user.id, entity_type="TRANSFORMATION",
+                 entity_id=transformation_id, details={"validation": plan.validation})
+    background_tasks.add_task(process_transformation, transformation_id, None, run_id, plan.spec)
+    return {"data": _detail(_owned_row(transformation_id, user))}
 
 
 @router.post("/{transformation_id}/retry")

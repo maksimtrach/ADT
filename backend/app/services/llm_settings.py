@@ -40,6 +40,7 @@ def dump_llm_configuration(configuration: LLMConfiguration) -> str:
     if invalid_names:
         raise ValueError("Имена LLM-профилей могут содержать только латинские буквы, цифры, _ и -")
     lines = [
+        f"total_timeout_seconds = {configuration.total_timeout_seconds}",
         "# Управляется через административную страницу настроек LLM.",
         f"active_profile = {_quoted(configuration.active_profile)}",
         "fallback_profiles = [" + ", ".join(_quoted(item) for item in configuration.fallback_profiles) + "]",
@@ -58,6 +59,8 @@ def dump_llm_configuration(configuration: LLMConfiguration) -> str:
             f"no_think_suffix = {str(profile.no_think_suffix).lower()}",
             f"structured_output = {str(profile.structured_output).lower()}",
         ])
+        if profile.reasoning_effort is not None:
+            lines.append(f"reasoning_effort = {_quoted(profile.reasoning_effort)}")
         if profile.keep_alive is not None:
             lines.append(f"keep_alive = {_quoted(profile.keep_alive)}")
         if profile.api_key_env is not None:
@@ -67,6 +70,7 @@ def dump_llm_configuration(configuration: LLMConfiguration) -> str:
             f"[profiles.{name}.generation]",
             f"temperature = {profile.generation.temperature}",
             f"max_tokens = {profile.generation.max_tokens}",
+            f"candidate_max_tokens = {profile.generation.candidate_max_tokens}",
         ])
         if profile.generation.context_size is not None:
             lines.append(f"context_size = {profile.generation.context_size}")

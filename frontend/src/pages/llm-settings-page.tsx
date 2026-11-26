@@ -17,11 +17,12 @@ const defaultProfile: LLMProfile = {
   timeout_seconds: 180,
   connect_timeout_seconds: 10,
   thinking: false,
+  reasoning_effort: null,
   no_think_suffix: true,
   keep_alive: "10m",
   api_key_env: null,
   structured_output: true,
-  generation: { temperature: 0, max_tokens: 1800, context_size: 16384 },
+  generation: { temperature: 0, max_tokens: 1800, candidate_max_tokens: 512, context_size: 16384 },
 };
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -163,6 +164,9 @@ export function LLMSettingsPage() {
             setDraft({ ...draft, active_profile: active, fallback_profiles: draft.fallback_profiles.filter((name) => name !== active) });
           }}>{profileNames.map((name) => <option key={name} value={name}>{name}</option>)}</Select>
         </Field>
+        <Field label="Общий бюджет ожидания LLM, сек." hint="На все запросы и резервные модели одной обработки, начиная с первого вызова. После исчерпания бюджета новые запросы не отправляются.">
+          <Input type="number" min={1} value={draft.total_timeout_seconds ?? 180} onChange={(event) => setDraft({ ...draft, total_timeout_seconds: numberValue(event.target.value, 180) })} />
+        </Field>
         <div>
           <div className="text-sm font-semibold text-slate-700">Резервные профили</div>
           <div className="mt-2 flex flex-wrap gap-2">
@@ -210,7 +214,7 @@ export function LLMSettingsPage() {
             <Field label="Переменная API-ключа" hint="Хранится только имя переменной, не сам секрет.">
               <Input value={profile.api_key_env ?? ""} placeholder="REMOTE_LLM_API_KEY" onChange={(event) => updateProfile(name, { api_key_env: event.target.value || null })} />
             </Field>
-            <Field label="Общий таймаут, сек.">
+            <Field label="Таймаут запроса профиля, сек." hint="Ограничивается оставшимся общим бюджетом LLM.">
               <Input type="number" min={1} value={profile.timeout_seconds} onChange={(event) => updateProfile(name, { timeout_seconds: numberValue(event.target.value, 180) })} />
             </Field>
             <Field label="Таймаут подключения, сек.">
@@ -219,21 +223,31 @@ export function LLMSettingsPage() {
             <Field label="Keep alive" hint="Используется Ollama; пустое значение отключает параметр.">
               <Input value={profile.keep_alive ?? ""} placeholder="10m" onChange={(event) => updateProfile(name, { keep_alive: event.target.value || null })} />
             </Field>
-            <Field label="Размер контекста">
+            <Field label="Размер контекста" hint="Передаётся только Ollama. Для OpenAI-совместимого сервера контекст задаётся на сервере.">
               <Input type="number" min={512} value={profile.generation.context_size ?? ""} placeholder="По умолчанию модели" onChange={(event) => updateGeneration(name, { context_size: event.target.value ? numberValue(event.target.value, 16384) : null })} />
             </Field>
             <Field label="Температура">
               <Input type="number" min={0} max={2} step={0.1} value={profile.generation.temperature} onChange={(event) => updateGeneration(name, { temperature: numberValue(event.target.value, 0) })} />
             </Field>
-            <Field label="Максимум токенов">
+            <Field label="Максимум токенов" hint="Верхний лимит ответа при распознавании структуры и корректировках; не размер входного контекста.">
               <Input type="number" min={1} value={profile.generation.max_tokens} onChange={(event) => updateGeneration(name, { max_tokens: numberValue(event.target.value, 1800) })} />
             </Field>
+            <Field label="Токенов для выбора гипотезы" hint="Отдельный лимит короткого ответа, не выше общего максимума. Обычно достаточно 512.">
+              <Input type="number" min={1} value={profile.generation.candidate_max_tokens ?? 512} onChange={(event) => updateGeneration(name, { candidate_max_tokens: numberValue(event.target.value, 512) })} />
+            </Field>
+            {profile.protocol === "openai" && <Field label="Reasoning effort" hint="none отключает thinking на проверенном сервере Qwen. Пустое значение не передаёт параметр; поддержка зависит от сервера.">
+              <Select value={profile.reasoning_effort ?? ""} onChange={(event) => updateProfile(name, { reasoning_effort: (event.target.value || null) as LLMProfile["reasoning_effort"] })}>
+                <option value="">Не передавать</option>
+                <option value="none">none — без thinking</option>
+                {["minimal", "low", "medium", "high", "xhigh"].map((value) => <option key={value} value={value}>{value}</option>)}
+              </Select>
+            </Field>}
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Toggle checked={profile.enabled} onChange={(enabled) => updateProfile(name, { enabled })} label="Профиль включён" hint="Отключённый профиль пропускается при обработке." />
             <Toggle checked={profile.structured_output} onChange={(structured_output) => updateProfile(name, { structured_output })} label="Структурированный ответ" hint="Запрашивать JSON-схему, если сервер поддерживает." />
-            <Toggle checked={profile.thinking} onChange={(thinking) => updateProfile(name, { thinking })} label="Thinking" hint="Разрешить режим рассуждений модели." />
+            {profile.protocol === "ollama" && <Toggle checked={profile.thinking} onChange={(thinking) => updateProfile(name, { thinking })} label="Thinking (Ollama)" hint="Для OpenAI-совместимых серверов используется отдельное поле Reasoning effort." />}
             <Toggle checked={profile.no_think_suffix} onChange={(no_think_suffix) => updateProfile(name, { no_think_suffix })} label="No think" hint="Добавлять к запросу инструкцию /no_think." />
           </div>
         </div>

@@ -26,10 +26,9 @@ class OllamaAdapter(LLMAdapter):
         schema: dict[str, Any],
         schema_name: str,
     ) -> tuple[str, dict[str, Any]]:
-        del schema_name
         options: dict[str, Any] = {
             "temperature": self.profile.generation.temperature,
-            "num_predict": self.profile.generation.max_tokens,
+            "num_predict": self.profile.generation.token_limit(schema_name),
         }
         if self.profile.generation.context_size:
             options["num_ctx"] = self.profile.generation.context_size

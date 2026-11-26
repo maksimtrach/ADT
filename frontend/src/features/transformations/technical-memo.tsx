@@ -10,6 +10,10 @@ import type { TransformationMemo, TransformationRunEvent, TransformationStatus }
 
 const eventLabels: Record<string, string> = {
   DOCUMENT_PROFILE_SELECTED: "Выбран профиль документа",
+  HYPOTHESES_GENERATION_STARTED: "Формирование гипотез структуры",
+  HYPOTHESES_PREPARATION_STARTED: "Подготовка данных для проверки гипотез",
+  HYPOTHESIS_EVALUATION_STARTED: "Начата проверка гипотезы",
+  HYPOTHESES_SELECTION_STARTED: "Выбор лучшей гипотезы",
   MEMORY_SEARCH: "Поиск подходов в памяти",
   MEMORY_CANDIDATE_CHECKED: "Проверка подхода из памяти на текущем файле",
   MEMORY_APPLIED: "Применён подход из памяти",
@@ -21,12 +25,22 @@ const eventLabels: Record<string, string> = {
   PROFILE_CREATED: "Профиль книги сформирован",
   SOURCE_SAMPLE: "Первые строки исходного файла",
   BASELINE_SPEC_CREATED: "Базовые правила преобразования",
-  BASELINE_CHECKED: "Проверка базовых правил на данных и контрольных суммах",
+  BASELINE_CHECKED: "Проверка базовых правил на данных и итоговых суммах",
+  CANDIDATE_VALIDATED: "Проверка выбранных правил и итоговых сумм",
+  ERRORS_ACCEPTED: "Результат принят с арифметическими расхождениями",
   HYPOTHESES_EVALUATED: "Сравнение вариантов структуры по данным",
+  STRUCTURE_RECOGNIZED: "Распознанные поля и границы данных",
   USER_MAPPING_APPLIED: "Источник поля изменён для всех строк",
   LLM_CANDIDATE_SELECTED: "Модель выбрала проверенный вариант",
   STRUCTURE_UNRESOLVED: "Структура требует уточнения",
   LLM_STRUCTURE_RECOVERY_STARTED: "Резервное распознавание структуры через LLM",
+  LLM_HEADER_RECOGNITION_STARTED: "Распознавание шапки через LLM",
+  LLM_HEADER_ACCEPTED: "Шапка и колонки LLM приняты",
+  LLM_HEADER_SKIPPED: "Шапка подтверждена без LLM",
+  LLM_FOOTER_RECOGNITION_STARTED: "Распознавание футера через LLM",
+  LLM_FOOTER_ACCEPTED: "Граница и футер LLM приняты",
+  LLM_FOOTER_SKIPPED: "Граница и футер подтверждены без LLM",
+  LLM_STAGED_STRUCTURE_CHECKED: "Итоговая схема проверена приложением",
   LLM_STRUCTURE_CHECKED: "Проверка структуры, предложенной LLM",
   LLM_STRUCTURE_ACCEPTED: "Предложенная LLM структура принята",
   LLM_STRUCTURE_REJECTED: "Предложенная LLM структура отклонена",
@@ -96,7 +110,7 @@ function describeSpec(details: Record<string, unknown>) {
     lines.push(`- пропускать пустые: ${rules.skip_empty === false ? "нет" : "да"}`);
     if (Array.isArray(rules.skip_keywords)) lines.push(`- пропускать итоговые строки: ${rules.skip_keywords.map(String).join(", ") || "нет"}`);
     if (Array.isArray(rules.inherit_fields)) lines.push(`- наследовать значения: ${rules.inherit_fields.map(String).join(", ") || "нет"}`);
-    if (rules.account_tree) lines.push("- контрольные суммы: по верхнему уровню счетов, без повторного сложения субсчетов");
+    if (rules.account_tree) lines.push("- итоговые суммы: по верхнему уровню счетов, без повторного сложения субсчетов");
   }
   if (Array.isArray(spec.value_overrides) && spec.value_overrides.length) {
     lines.push("", "Пользовательские переопределения:", JSON.stringify(spec.value_overrides, null, 2));
@@ -184,9 +198,9 @@ export function TechnicalMemo({ transformationId, status }: { transformationId: 
   };
 
   return (
-    <section className="overflow-hidden border-t" aria-label="Техническое мемо обработки">
+    <section className="overflow-hidden rounded-lg" aria-label="Техническое мемо обработки">
       <CardHeader
-        title="Техническое мемо обработки"
+        title="6. Техническое мемо"
         description="Файл, исходные строки, правила, запрос и ответ LLM, преобразование и контроль"
         action={memo.data && <div className="flex gap-2"><Button size="sm" variant="secondary" onClick={() => void copy()}><Clipboard className="h-3.5 w-3.5" />Копировать</Button><Button size="sm" variant="secondary" onClick={download}><Download className="h-3.5 w-3.5" />TXT</Button></div>}
       />

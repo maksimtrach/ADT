@@ -13,6 +13,7 @@ from backend.app.services.llm.base import LLMCallResult
 from backend.app.services.planner import LLMPlanner
 from backend.app.services.rule_planner import standard_money_mapping
 from backend.app.services.structure_recovery import build_recovered_spec, recovery_profile, StructureAnswer, StructureLayout
+from backend.app.services.staged_structure_recovery import header_answer_model
 
 
 def recovery_workbook(path):
@@ -34,7 +35,26 @@ def answer_layout():
             "explanation": "Шесть денежных колонок, счёт и валютные расшифровки", "clarification": None}
 
 
+def answer_header():
+    layout = answer_layout()["layout"]
+    return {"layout": {"sheet_name": layout["sheet_name"], "header_start_row": layout["header_start_row"],
+                       "header_end_row": layout["header_end_row"], "data_start_row": layout["data_start_row"],
+                       "row_mode": layout["row_mode"],
+                       "column_mapping": layout["column_mapping"]},
+            "explanation": "Шесть денежных колонок, счёт и валютные расшифровки", "clarification": None}
+
+
 def fake_planner(monkeypatch, answer):
+    if answer.get("layout") and "data_end_row" in answer["layout"]:
+        legacy = answer["layout"]
+        answer = {
+            **answer,
+            "layout": {
+                "sheet_name": legacy["sheet_name"], "header_start_row": legacy["header_start_row"],
+                "header_end_row": legacy["header_end_row"], "data_start_row": legacy["data_start_row"],
+                "row_mode": legacy["row_mode"], "column_mapping": legacy["column_mapping"],
+            },
+        }
     config = LLMConfiguration(active_profile="first", fallback_profiles=["second"], profiles={
         name: LLMProfile(protocol="openai", base_url="http://unused.test/v1", model=name) for name in ("first", "second")
     })
@@ -42,8 +62,8 @@ def fake_planner(monkeypatch, answer):
 
     def complete(adapter, messages, schema, schema_name, trace=None):
         calls.append(adapter.profile_name)
-        assert schema_name == "StructureAnswer"
         payload = json.loads(messages[1]["content"])
+        assert schema_name == "HeaderAnswer"
         assert payload["profile"]["sheets"][0]["samples"]
         return LLMCallResult(json.dumps(answer, ensure_ascii=False), {}, 1)
 
@@ -63,7 +83,7 @@ def test_llm_recovers_layout_and_never_sums_currency_rows(tmp_path, monkeypatch)
     recovery_workbook(path)
     selection = choose_plan(path, DataType.TRIAL_BALANCE, "trial_balance_flat_v1")
     assert not any(c.eligible for c in selection.candidates)
-    planner, calls = fake_planner(monkeypatch, answer_layout())
+    planner, calls = fake_planner(monkeypatch, answer_header())
     events = []
     result = planner.recognize_structure(path, DataType.TRIAL_BALANCE, "trial_balance_flat_v1", selection,
                                          trace=lambda event, details: events.append(event))
@@ -84,10 +104,10 @@ def test_llm_recovers_layout_and_never_sums_currency_rows(tmp_path, monkeypatch)
 def test_bad_llm_layout_rejected_without_trying_another_model(tmp_path, monkeypatch, invalid):
     path = tmp_path / "recovery.xlsx"
     recovery_workbook(path)
-    answer = answer_layout()
+    answer = answer_header()
     layout = answer["layout"]
     if invalid == "duplicate_column": layout["column_mapping"]["turnover_debit"] = 3
-    if invalid == "truncate": layout["data_end_row"] = 3
+    if invalid == "truncate": layout["data_start_row"] = 5
     if invalid == "skip_data": layout.update(header_end_row=2, data_start_row=3)
     if invalid == "change_values": layout["value_overrides"] = [{"value": 0}]
     if invalid == "invalid_column": layout["column_mapping"]["opening_debit"] = 999
@@ -105,13 +125,17 @@ def test_bad_llm_layout_rejected_without_trying_another_model(tmp_path, monkeypa
 
 
 def test_structure_schema_requires_positive_column_numbers_and_allows_null():
-    schema = StructureAnswer.model_json_schema()
-    column = schema["$defs"]["StructureLayout"]["properties"]["column_mapping"]["additionalProperties"]
+    model = header_answer_model("trial_balance_flat_v1")
+    schema = model.model_json_schema()
+    mapping = schema["$defs"]["ColumnMapping_trial_balance_flat_v1"]
+    assert mapping["additionalProperties"] is False
+    assert set(mapping["properties"]) == {"account", "account_name", *MONEY_KEYS}
+    assert set(mapping["required"]) == set(mapping["properties"])
+    column = mapping["properties"]["account"]
     assert {"type": "integer", "minimum": 1} in column["anyOf"]
     assert {"type": "null"} in column["anyOf"]
-    answer = answer_layout()
-    answer["layout"]["column_mapping"]["subaccount"] = None
-    assert StructureAnswer.model_validate(answer).layout.column_mapping["account"] == 1
+    answer = answer_header()
+    assert model.model_validate(answer).layout.column_mapping.account == 1
 
 
 def test_llm_account_tree_allows_missing_account_name(tmp_path):
@@ -146,7 +170,7 @@ def test_bad_source_arithmetic_is_not_overridden_by_model(tmp_path, monkeypatch)
     book.active["G2"] = 999
     book.save(path)
     book.close()
-    planner, calls = fake_planner(monkeypatch, answer_layout())
+    planner, calls = fake_planner(monkeypatch, answer_header())
     with pytest.raises(AppError, match="не прошла проверки"):
         planner.recognize_structure(path, DataType.TRIAL_BALANCE, "trial_balance_flat_v1", PlanSelection([], False, 0))
     assert calls == ["first"]

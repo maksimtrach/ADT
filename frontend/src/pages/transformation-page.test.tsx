@@ -12,7 +12,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()), api: request, downloadResult: vi.fn(),
 }));
 vi.mock("../components/ui/toast", () => ({ useToast: () => ({ show: showToast }) }));
-vi.mock("../features/transformations/technical-memo", () => ({ TechnicalMemo: () => <div>Мемо сохранено</div> }));
+vi.mock("../features/transformations/technical-memo", () => ({ TechnicalMemo: () => <div><h2>6. Техническое мемо</h2>Мемо сохранено</div> }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -110,15 +110,56 @@ describe("Новое преобразование", () => {
 });
 
 describe("Повторная обработка", () => {
+  it("заполняет отклонённые моделью поля и сохраняет пользовательские правки", async () => {
+    detail.correction_structure = {
+      sheet_name: "ОСВ", header_start_row: 1, header_end_row: 4,
+      data_start_row: 8, data_end_row: null, control_rows: [], service_rows: [],
+      header_source: "LLM", footer_source: null,
+      fields: [{ key: "account", label: "Счет", column: 2, column_letter: "B", source: "LLM" }],
+    };
+    await mount();
+    expect(textarea().value).toContain("Счет: B");
+    expect(textarea().value).toContain("Шапка: 1–4");
+    expect(textarea().value).toContain("Данные: 8–");
+    await enterComment("Счет: A");
+    await act(async () => {
+      client.setQueryData(["transformation", "test"], { ...detail, processing_run_id: "next" });
+    });
+    await settle();
+    expect(textarea().value).toBe("Счет: A");
+  });
+
   it("доступна после ошибки без успешной версии; результат не показывается", async () => {
     await mount();
     expect(textarea()).not.toBeNull();
     expect(button("Повторить без изменений").disabled).toBe(false);
-    expect(button("Повторить с комментарием").disabled).toBe(true);
+    expect(button("Повторить с комментарием").disabled).toBe(false);
+    expect(textarea().value).toContain("Данные: ");
+    expect(container.textContent).toContain("может содержать ошибки");
+    expect(button("Вставить шаблон").disabled).toBe(false);
     expect(container.textContent).toContain("Загружать файл заново не требуется");
     expect(container.textContent).toContain("Структура неоднозначна");
     expect(container.textContent).not.toContain("Выгрузить в Excel");
     expect(request.mock.calls.some(([path]) => path.endsWith("/preview"))).toBe(false);
+  });
+
+  it("показывает этап, детали и рекомендацию для ошибки", async () => {
+    detail = {
+      ...detail,
+      error_details: {
+        stage: "PLANNING",
+        code: "INVALID_COLUMN_MAPPING",
+        reason: "Колонка счёта выходит за границы листа",
+        details: ["Не обработаны строки: 12, 13"],
+        recommendation: "Проверьте номера колонок и повторите обработку.",
+      },
+    };
+    await mount();
+    expect(container.textContent).toContain("Причина ошибки");
+    expect(container.textContent).toContain("Этап: Определение структуры");
+    expect(container.textContent).toContain("INVALID_COLUMN_MAPPING");
+    expect(container.textContent).toContain("Не обработаны строки: 12, 13");
+    expect(container.textContent).toContain("Что можно сделать");
   });
 
   it("сохраняет комментарий при повторной ошибке и блокирует обе кнопки во время запуска", async () => {
@@ -184,16 +225,27 @@ describe("Повторная обработка", () => {
 describe("Вертикальная компоновка", () => {
   const blocks = [
     "1. Загрузка файла", "2. Параметры преобразования", "3. Статус преобразования",
-    "4. Результаты преобразования", "5. Корректировки",
+    "4. Корректировки", "5. Результаты преобразования", "6. Техническое мемо",
   ];
 
-  it("показывает все пять блоков по порядку до загрузки", async () => {
+  it("показывает все шесть блоков по порядку до загрузки", async () => {
     await mount("/transformations");
     expect(Array.from(container.querySelectorAll("h2"), (heading) => heading.textContent)).toEqual(blocks);
     expect(textarea().disabled).toBe(true);
     expect(button("Преобразовать").disabled).toBe(true);
     expect(button("Повторить без изменений").disabled).toBe(true);
     expect(container.textContent).toContain("Результат пока не готов");
+  });
+
+  it("мемо находится после результатов, отдельно от корректировок", async () => {
+    await mount();
+    const memoCard = container.querySelector('[aria-label="6. Техническое мемо"]')!;
+    expect(memoCard.textContent).toContain("Мемо сохранено");
+    expect(memoCard.contains(textarea())).toBe(false);
+    expect(memoCard.previousElementSibling!.textContent).toContain("5. Результаты преобразования");
+    const corrections = memoCard.previousElementSibling!.previousElementSibling!;
+    expect(corrections.textContent).toContain("4. Корректировки");
+    expect(corrections.contains(textarea())).toBe(true);
   });
 
   it("показывает первые строки в области с прокруткой и кнопку выгрузки после успеха", async () => {
@@ -228,6 +280,61 @@ describe("Вертикальная компоновка", () => {
     expect(region?.textContent).toContain("Детальный счёт");
     expect(region?.querySelector("th:nth-child(2)")?.className).toContain("border-l-2");
     expect(container.textContent).toContain("Показаны первые 1 из 120 записей");
+  });
+});
+
+describe("Диагностика итоговых сумм", () => {
+  it("показывает строки, расхождения и отправляет явное принятие ошибок", async () => {
+    detail = { ...detail, can_accept_errors: true, validation_details: {
+      control_rows: [201], aggregation: "root_accounts",
+      control_comparisons: { opening_debit: { declared: 100, calculated: 90, difference: -10, passed: false } },
+      row_balance: { checked: 193, failed: 1, examples: [{ row: 42, difference: -10 }] },
+    } };
+    const previous = request.getMockImplementation()!;
+    request.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/accept-errors")) return { ...detail, status: "QUEUED", current_stage: "QUEUED", can_accept_errors: false };
+      return previous(path, init);
+    });
+    await mount();
+    expect(container.textContent).toContain("Итоговые строки исходного листа: 201");
+    expect(container.querySelector('[aria-label="Строки с нарушением формулы"]')?.textContent).toContain("42");
+    expect(container.textContent).toContain("Расхождение");
+    await act(async () => button("Загрузить с ошибками").click());
+    await settle();
+    expect(request).toHaveBeenCalledWith("/transformations/test/accept-errors", { method: "POST" });
+  });
+});
+
+describe("Распознанная структура", () => {
+  it("показывает поля, источники и границы даже после ошибки", async () => {
+    detail = {
+      ...detail,
+      recognized_structure: {
+        sheet_name: "ОСВ",
+        header_start_row: 3,
+        header_end_row: 4,
+        data_start_row: 5,
+        data_end_row: 73,
+        control_rows: [74],
+        service_rows: [78, 79],
+        header_source: "RULES",
+        footer_source: "LLM",
+        fields: [
+          { key: "account", label: "Счёт", column: 1, column_letter: "A", source: "RULES" },
+          { key: "account_name", label: "Наименование счёта", column: 2, column_letter: "B", source: "LLM" },
+        ],
+      },
+    };
+    await mount();
+    expect(container.textContent).toContain("Распознанная структура");
+    expect(container.textContent).toContain("строки 3–4");
+    expect(container.textContent).toContain("строка 5");
+    expect(container.textContent).toContain("строка 73");
+    expect(container.textContent).toContain("A (колонка 1)");
+    expect(container.textContent).toContain("Детерминированные правила");
+    expect(container.textContent).toContain("Наименование счёта");
+    expect(container.textContent).toContain("LLM");
+    expect(container.textContent).toContain("Служебный футер: строки 78, 79");
   });
 });
 
